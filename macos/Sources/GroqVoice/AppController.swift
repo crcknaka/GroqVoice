@@ -37,7 +37,7 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     enum IconState: Equatable {
         case inactive       // hotkey not running (permission missing)
-        case ready, recording, translating, locked, processing, screenRecording
+        case ready, recording, translating, editing, locked, processing, screenRecording
         case failed         // brief flash after an error
         case copied         // brief flash after copying from Recent
     }
@@ -74,6 +74,8 @@ final class AppController: NSObject, NSApplicationDelegate {
     var localModelStatus: String?
 
     private var takeKind: TakeKind = .dictate
+    /// Text that was selected in the focused app when the take started.
+    private var pendingSelection: String?
     private var activeKey: HotkeyKey?
     private var keyDownAt: Date?
     private var lastQuickTapAt: Date?
@@ -384,9 +386,17 @@ final class AppController: NSObject, NSApplicationDelegate {
         do {
             try recorder.start(deviceUID: config.inputDeviceUID)
             phase = .recording(locked: locked)
-            setIcon(takeKind == .translate ? .translating : .recording)
+            // A selection at key-down turns the take into an edit of that text.
+            pendingSelection = nil
+            if takeKind == .dictate, config.editSelection, config.llmConfigured || LocalLLM.isAvailable,
+               let selected = FocusedText.selectedText() {
+                pendingSelection = selected
+            }
+            let icon: IconState = takeKind == .translate ? .translating : (pendingSelection != nil ? .editing : .recording)
+            setIcon(icon)
             playSound("Pop")
-            Log.write("recording started (\(takeKind == .translate ? "translate" : "dictate"))")
+            let label = takeKind == .translate ? "translate" : (pendingSelection != nil ? "edit selection, \(pendingSelection!.count) chars" : "dictate")
+            Log.write("recording started (\(label))")
         } catch {
             phase = .idle
             flashIcon(.failed)
@@ -430,6 +440,8 @@ final class AppController: NSObject, NSApplicationDelegate {
 
         let cfg = config
         let kind = takeKind
+        let selection = pendingSelection
+        pendingSelection = nil
         let released = releasedAt ?? Date()
         let vocabPrompt = vocabulary.prompt()
         let sttProbe = CloudProbe(host: "api.groq.com")
@@ -453,7 +465,21 @@ final class AppController: NSObject, NSApplicationDelegate {
 
                 var output = transcript
                 var historyKind = "dictation"
-                if kind == .translate {
+                if kind == .dictate, let selection {
+                    // "задание: …" in front of an instruction is fine too — drop the keyword.
+                    let spoken = TaskRouter.taskQuery(from: transcript, keywords: cfg.taskKeywords,
+                                                      maxPosition: cfg.taskKeywordMaxWordPosition) ?? transcript
+                    let user = TaskRouter.editSelectionUserMessage(selection: selection, spoken: spoken)
+                    if let edited = await self.obtainChatAnswer(query: user, system: TaskRouter.editSelectionSystemPrompt,
+                                                                cfg: cfg, probe: chatProbe, temperature: 0),
+                       !edited.isEmpty {
+                        historyKind = "edit"
+                        output = edited
+                        Log.write("edit selection → \"\(output.prefix(200))\"")
+                    } else {
+                        Log.write("edit selection: no LLM answer — dictation replaces the selection")
+                    }
+                } else if kind == .translate {
                     historyKind = "translate"
                     let system = TaskRouter.translateSystemPrompt(to: cfg.translateLanguageName)
                     guard let translated = await self.obtainChatAnswer(query: transcript, system: system, cfg: cfg,
@@ -483,7 +509,7 @@ final class AppController: NSObject, NSApplicationDelegate {
                     output = await self.cleanup(transcript, vocabulary: vocabPrompt, cfg: cfg, probe: chatProbe)
                 }
 
-                if cfg.spokenFormatting, kind != .translate {
+                if cfg.spokenFormatting, historyKind == "dictation" {
                     let formatted = SpokenFormatting.apply(output)
                     if formatted != output {
                         Log.write("spoken formatting applied")
@@ -496,7 +522,8 @@ final class AppController: NSObject, NSApplicationDelegate {
                 let terms = Set(self.vocabulary.entries.map(\.term))
                 await MainActor.run {
                     var toInsert = finalText
-                    if cfg.smartSpacing, let context = FocusedText.current() {
+                    // Replacing a selection: the text takes the selection's exact place.
+                    if cfg.smartSpacing, selection == nil, let context = FocusedText.current() {
                         toInsert = context.adjust(finalText, knownTerms: terms)
                         if toInsert != finalText { Log.write("smart spacing: adjusted for the caret context") }
                     }
@@ -749,6 +776,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             case .ready: return ("mic", nil)
             case .recording: return ("mic.fill", .systemRed)
             case .translating: return ("mic.fill", .systemBlue)
+            case .editing: return ("mic.fill", .systemPurple)
             case .locked: return ("mic.fill", .systemOrange)
             case .processing: return ("hourglass", .systemYellow)
             case .screenRecording: return ("video.fill", .systemRed)

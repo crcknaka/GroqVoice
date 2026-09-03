@@ -146,7 +146,7 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
                 ])
                 return c
             }()
-            let symbol: String? = entry.kind == "task" ? "sparkles" : entry.kind == "translate" ? "globe" : nil
+            let symbol: String? = ["task": "sparkles", "translate": "globe", "edit": "pencil"][entry.kind]
             cell.imageView?.image = symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: entry.kind) }
             cell.imageView?.contentTintColor = .secondaryLabelColor
             return cell

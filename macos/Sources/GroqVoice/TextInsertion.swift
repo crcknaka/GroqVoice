@@ -45,6 +45,21 @@ struct FocusedText {
         return FocusedText(before: before, after: after, isEmpty: ns.length == 0)
     }
 
+    /// The text currently selected in the focused element, or nil when there
+    /// is none or the app doesn't expose it through Accessibility.
+    static func selectedText() -> String? {
+        let system = AXUIElementCreateSystemWide()
+        var focusedRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
+              let focusedAny = focusedRef else { return nil }
+        let element = focusedAny as! AXUIElement
+        var selectedRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &selectedRef) == .success,
+              let selected = selectedRef as? String else { return nil }
+        let trimmed = selected.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : selected
+    }
+
     /// Adjusts dictated text for where it lands: a space when glued to a word
     /// or sentence, lower-case first letter when continuing a sentence, a
     /// space before a following word. `knownTerms` (vocabulary) are never

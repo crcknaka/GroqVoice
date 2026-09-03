@@ -65,6 +65,7 @@ extension AppController: NSMenuDelegate {
                 switch entry.kind {
                 case "task": row.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
                 case "translate": row.image = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)
+                case "edit": row.image = NSImage(systemSymbolName: "pencil", accessibilityDescription: nil)
                 default: break
                 }
                 sub.addItem(row)

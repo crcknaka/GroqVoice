@@ -38,6 +38,26 @@ enum TaskRouter {
         return prompt
     }
 
+    /// System prompt for "text was selected when the key went down": the
+    /// utterance is either an instruction about that text or a replacement.
+    static let editSelectionSystemPrompt = """
+    You are the editing stage of a voice-dictation tool. The user selected some text in an \
+    application, held the dictation key and spoke. You receive the selected text and the \
+    transcript of what they said. Decide which of two things happened:
+    (A) They gave an instruction about the selected text — rewrite, shorten, expand, translate, \
+    fix grammar or typos, change tone, reformat, summarize, continue it, answer a question it \
+    contains, and so on. Then apply the instruction to the selected text and output ONLY the \
+    resulting text that should replace the selection.
+    (B) They simply dictated new content to put in place of the selection (it reads as content, \
+    not as a command about the text). Then output the spoken text exactly as transcribed.
+    Keep the selected text's language unless asked to translate; preserve its line breaks and \
+    formatting when editing. Never explain your choice, never add quotes, notes or alternatives.
+    """
+
+    static func editSelectionUserMessage(selection: String, spoken: String) -> String {
+        "SELECTED TEXT:\n<<<\n\(selection)\n>>>\n\nSPOKEN:\n\(spoken)"
+    }
+
     /// System prompt for the translate hotkey: the whole utterance is text to
     /// translate, never a request.
     static func translateSystemPrompt(to language: String) -> String {

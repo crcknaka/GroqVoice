@@ -75,6 +75,9 @@ struct Config: Codable {
     var smartSpacing = true
     /// "новая строка" / "абзац" / "new line" become line breaks.
     var spokenFormatting = true
+    /// With text selected when the key goes down, what you say is treated as
+    /// an instruction about it (or as its replacement). Needs an LLM.
+    var editSelection = true
     /// Record from the built-in microphone when the system default is a
     /// Bluetooth headset (AirPods) — better audio, and the headset keeps
     /// its high-quality output profile.
@@ -134,7 +137,7 @@ struct Config: Codable {
         case pttHoldMs, doubleTapWindowMs, releaseTailMs, autostart
         case sttEngine, sttFallback, localUnloadAfterMinutes, vocabularyBoosting
         case hotkey, translateHotkey, translateLanguage, inputDeviceUID, cleanupTranscript
-        case pasteMode, restoreClipboard, historySize, smartSpacing, spokenFormatting, preferBuiltInMic
+        case pasteMode, restoreClipboard, historySize, smartSpacing, spokenFormatting, preferBuiltInMic, editSelection
         // Legacy keys, migrated on load.
         case transcriptionModel, chatModel, localMode
     }
@@ -197,6 +200,7 @@ struct Config: Codable {
         smartSpacing = get(.smartSpacing, d.smartSpacing)
         spokenFormatting = get(.spokenFormatting, d.spokenFormatting)
         preferBuiltInMic = get(.preferBuiltInMic, d.preferBuiltInMic)
+        editSelection = get(.editSelection, d.editSelection)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -233,6 +237,7 @@ struct Config: Codable {
         try c.encode(smartSpacing, forKey: .smartSpacing)
         try c.encode(spokenFormatting, forKey: .spokenFormatting)
         try c.encode(preferBuiltInMic, forKey: .preferBuiltInMic)
+        try c.encode(editSelection, forKey: .editSelection)
     }
 
     static func load() -> Config {

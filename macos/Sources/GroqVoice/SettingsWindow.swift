@@ -102,6 +102,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     private let chatModelsField = NSTextField()
     private let llmStatusLabel = NSTextField(wrappingLabelWithString: "")
     private let cleanupCheck = NSButton(checkboxWithTitle: "Clean up dictation with the LLM", target: nil, action: nil)
+    private let editSelectionCheck = NSButton(checkboxWithTitle: "Voice-edit selected text", target: nil, action: nil)
     private let keywordsField = NSTextField()
     private let keywordPosField = NSTextField()
     private let promptView = NSTextView()
@@ -335,6 +336,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             if !models.isEmpty { self.app.config.chatModels = models }
         }
         bindCheck(cleanupCheck) { [unowned self] on in self.app.config.cleanupTranscript = on }
+        bindCheck(editSelectionCheck) { [unowned self] on in self.app.config.editSelection = on }
         bindText(keywordsField, width: 190) { [unowned self] text in
             let words = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             if !words.isEmpty { self.app.config.taskKeywords = words }
@@ -377,6 +379,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             [empty(), llmStatusLabel],
         ])
         let featuresGrid = grid([
+            [empty(), editSelectionCheck],
+            [empty(), hint("Select text anywhere, hold the dictation key and say what to do with it — “сделай короче”, “переведи на латышский”, “исправь ошибки”. The result replaces the selection. Plain dictation with a selection still replaces it.")],
             [empty(), cleanupCheck],
             [empty(), hint("Punctuation, filler words and vocabulary spellings; wording is kept. Off = paste exactly what was recognized.")],
             [label("Task keywords:"), row(keywordsField, label("within the first"), keywordPosField, unit("words"))],
@@ -479,6 +483,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         backend += ". Apple Intelligence on this Mac: \(LocalLLM.statusDescription) (used as a fallback when available)."
         llmStatusLabel.stringValue = backend
         cleanupCheck.state = c.cleanupTranscript ? .on : .off
+        editSelectionCheck.state = c.editSelection ? .on : .off
         keywordsField.stringValue = c.taskKeywords.joined(separator: ", ")
         keywordPosField.stringValue = "\(c.taskKeywordMaxWordPosition)"
         if promptView.string != c.taskSystemPrompt { promptView.string = c.taskSystemPrompt }
