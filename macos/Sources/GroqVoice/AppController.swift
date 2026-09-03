@@ -291,6 +291,10 @@ final class AppController: NSObject, NSApplicationDelegate {
         hotkey.onKeyDown = { [weak self] key in self?.keyDown(key) }
         hotkey.onKeyUp = { [weak self] key in self?.keyUp(key) }
         hotkey.onChordKey = { [weak self] in self?.chordKey() }
+        hotkey.onEscape = { [weak self] in
+            guard let self, case .recording = self.phase else { return }
+            self.discardRecording(reason: "escape")
+        }
         hotkey.onScreenToggle = { [weak self] in self?.toggleScreenRecording() }
     }
 
@@ -370,6 +374,7 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     /// Keeps an engine for the configured microphone prepared while idle.
     func prepareRecorder() {
+        recorder.preferBuiltInOverBluetooth = config.preferBuiltInMic
         recorder.prepare(deviceUID: config.inputDeviceUID)
     }
 
@@ -478,10 +483,24 @@ final class AppController: NSObject, NSApplicationDelegate {
                     output = await self.cleanup(transcript, vocabulary: vocabPrompt, cfg: cfg, probe: chatProbe)
                 }
 
+                if cfg.spokenFormatting, kind != .translate {
+                    let formatted = SpokenFormatting.apply(output)
+                    if formatted != output {
+                        Log.write("spoken formatting applied")
+                        output = formatted
+                    }
+                }
+
                 let finalText = output
                 let finalKind = historyKind
+                let terms = Set(self.vocabulary.entries.map(\.term))
                 await MainActor.run {
-                    Paster.deliver(finalText, mode: cfg.pasteModeValue, restoreClipboard: cfg.restoreClipboard)
+                    var toInsert = finalText
+                    if cfg.smartSpacing, let context = FocusedText.current() {
+                        toInsert = context.adjust(finalText, knownTerms: terms)
+                        if toInsert != finalText { Log.write("smart spacing: adjusted for the caret context") }
+                    }
+                    Paster.deliver(toInsert, mode: cfg.pasteModeValue, restoreClipboard: cfg.restoreClipboard)
                     Log.write(String(format: "take: key released → pasted in %.2fs (tail %.0f ms, stt %.2fs)",
                                      Date().timeIntervalSince(released), cfg.releaseTailMs, sttSeconds))
                     self.history.add(finalText, kind: finalKind)

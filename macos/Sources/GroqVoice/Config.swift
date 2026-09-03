@@ -70,6 +70,15 @@ struct Config: Codable {
     var cleanupTranscript = false
     /// "paste" — clipboard + ⌘V; "type" — synthesized keystrokes.
     var pasteMode = "paste"
+    /// Look at the text around the caret (Accessibility) and add a space /
+    /// fix the first letter's case when inserting mid-sentence.
+    var smartSpacing = true
+    /// "новая строка" / "абзац" / "new line" become line breaks.
+    var spokenFormatting = true
+    /// Record from the built-in microphone when the system default is a
+    /// Bluetooth headset (AirPods) — better audio, and the headset keeps
+    /// its high-quality output profile.
+    var preferBuiltInMic = true
     var restoreClipboard = true
     var historySize = 50
 
@@ -125,7 +134,7 @@ struct Config: Codable {
         case pttHoldMs, doubleTapWindowMs, releaseTailMs, autostart
         case sttEngine, sttFallback, localUnloadAfterMinutes, vocabularyBoosting
         case hotkey, translateHotkey, translateLanguage, inputDeviceUID, cleanupTranscript
-        case pasteMode, restoreClipboard, historySize
+        case pasteMode, restoreClipboard, historySize, smartSpacing, spokenFormatting, preferBuiltInMic
         // Legacy keys, migrated on load.
         case transcriptionModel, chatModel, localMode
     }
@@ -185,6 +194,9 @@ struct Config: Codable {
         pasteMode = get(.pasteMode, d.pasteMode)
         restoreClipboard = get(.restoreClipboard, d.restoreClipboard)
         historySize = get(.historySize, d.historySize)
+        smartSpacing = get(.smartSpacing, d.smartSpacing)
+        spokenFormatting = get(.spokenFormatting, d.spokenFormatting)
+        preferBuiltInMic = get(.preferBuiltInMic, d.preferBuiltInMic)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -218,6 +230,9 @@ struct Config: Codable {
         try c.encode(pasteMode, forKey: .pasteMode)
         try c.encode(restoreClipboard, forKey: .restoreClipboard)
         try c.encode(historySize, forKey: .historySize)
+        try c.encode(smartSpacing, forKey: .smartSpacing)
+        try c.encode(spokenFormatting, forKey: .spokenFormatting)
+        try c.encode(preferBuiltInMic, forKey: .preferBuiltInMic)
     }
 
     static func load() -> Config {

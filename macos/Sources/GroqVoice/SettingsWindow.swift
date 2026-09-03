@@ -68,6 +68,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     private let soundsCheck = NSButton(checkboxWithTitle: "Sound feedback (start, stop, error)", target: nil, action: nil)
     private let loginCheck = NSButton(checkboxWithTitle: "Launch at login", target: nil, action: nil)
     private let saveWavCheck = NSButton(checkboxWithTitle: "Keep the last recording (last.wav) for debugging", target: nil, action: nil)
+    private let smartSpacingCheck = NSButton(checkboxWithTitle: "Smart spacing and case when inserting mid-sentence", target: nil, action: nil)
+    private let spokenFormattingCheck = NSButton(checkboxWithTitle: "“Новая строка” / “абзац” / “new line” insert line breaks", target: nil, action: nil)
+    private let builtInMicCheck = NSButton(checkboxWithTitle: "Prefer the built-in microphone over Bluetooth headsets", target: nil, action: nil)
     private let holdField = NSTextField()
     private let doubleTapField = NSTextField()
     private let tailField = NSTextField()
@@ -105,7 +108,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     init(app: AppController) {
         self.app = app
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 760),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 800),
                               styleMask: [.titled, .closable, .miniaturizable],
                               backing: .buffered, defer: false)
         window.title = "GroqVoice Settings"
@@ -145,7 +148,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         NSLayoutConstraint.activate([
             // Fixed size: tab contents must fit, the window never grows to them.
             content.widthAnchor.constraint(equalToConstant: 640),
-            content.heightAnchor.constraint(equalToConstant: 760),
+            content.heightAnchor.constraint(equalToConstant: 800),
             tabs.topAnchor.constraint(equalTo: content.topAnchor, constant: 12),
             tabs.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
             tabs.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
@@ -207,6 +210,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         bindCheck(soundsCheck) { [unowned self] on in self.app.config.playFeedbackSounds = on }
         bindCheck(loginCheck) { [unowned self] on in self.app.config.autostart = on }
         bindCheck(saveWavCheck) { [unowned self] on in self.app.config.saveLastWav = on }
+        bindCheck(smartSpacingCheck) { [unowned self] on in self.app.config.smartSpacing = on }
+        bindCheck(spokenFormattingCheck) { [unowned self] on in self.app.config.spokenFormatting = on }
+        bindCheck(builtInMicCheck) { [unowned self] on in self.app.config.preferBuiltInMic = on }
 
         bindNumber(holdField, min: 50, max: 2000) { [unowned self] v in self.app.config.pttHoldMs = v }
         bindNumber(doubleTapField, min: 100, max: 2000) { [unowned self] v in self.app.config.doubleTapWindowMs = v }
@@ -225,11 +231,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             [label("Translate key:"), row(translateKeyPopup, label("into"), translateLangPopup)],
             [empty(), hint("A second key: speak in any language, the translation is pasted. Needs a language model (Groq & LLM tab).")],
             [label("Microphone:"), micPopup],
+            [empty(), builtInMicCheck],
             [label("Language:"), languagePopup],
             [empty(), languageHint],
         ])
         let pasteGrid = grid([
             [label("Insert text by:"), pastePopup],
+            [empty(), smartSpacingCheck],
+            [empty(), spokenFormattingCheck],
             [empty(), restoreClipboardCheck],
             [empty(), soundsCheck],
             [empty(), loginCheck],
@@ -419,6 +428,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         soundsCheck.state = c.playFeedbackSounds ? .on : .off
         loginCheck.state = c.autostart ? .on : .off
         saveWavCheck.state = c.saveLastWav ? .on : .off
+        smartSpacingCheck.state = c.smartSpacing ? .on : .off
+        spokenFormattingCheck.state = c.spokenFormatting ? .on : .off
+        builtInMicCheck.state = c.preferBuiltInMic ? .on : .off
         holdField.stringValue = format(c.pttHoldMs)
         doubleTapField.stringValue = format(c.doubleTapWindowMs)
         tailField.stringValue = format(c.releaseTailMs)

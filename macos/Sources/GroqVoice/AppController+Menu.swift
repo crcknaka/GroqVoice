@@ -45,6 +45,8 @@ extension AppController: NSMenuDelegate {
                           #selector(toggleScreenRecording)))
         menu.addItem(.separator())
         menu.addItem(item("Quit GroqVoice", #selector(menuQuit), key: "q"))
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        menu.addItem(status("GroqVoice \(version) · Parakeet v3"))
     }
 
     // MARK: - Submenus

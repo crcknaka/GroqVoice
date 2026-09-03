@@ -54,8 +54,23 @@ final class Recorder {
     /// hundred — the difference between catching and losing the first
     /// syllable). Cheap to call repeatedly; a no-op while recording or when the
     /// right engine is already waiting.
+    /// When the system default input is a Bluetooth headset, record from the
+    /// built-in microphone instead (set from config; see `resolve`).
+    var preferBuiltInOverBluetooth = true
+
+    /// Turns the configured device ("" = system default) into the device we
+    /// actually record from.
+    private func resolve(_ deviceUID: String) -> String {
+        guard deviceUID.isEmpty, preferBuiltInOverBluetooth,
+              let def = AudioDevices.defaultInputDeviceID(), AudioDevices.isBluetooth(def),
+              let builtIn = AudioDevices.builtInInputDevice() else { return deviceUID }
+        Log.write("mic: default input \(AudioDevices.name(of: def)) is Bluetooth → using \(builtIn.name)")
+        return builtIn.uid
+    }
+
     func prepare(deviceUID: String) {
         guard engine == nil else { return }
+        let deviceUID = resolve(deviceUID)
         if let prepared, prepared.deviceUID == deviceUID { return }
         discardPrepared()
         do {
@@ -71,6 +86,7 @@ final class Recorder {
     /// `deviceUID` empty = system default input.
     func start(deviceUID: String) throws {
         guard engine == nil else { return }
+        let deviceUID = resolve(deviceUID)
 
         let ready: Prepared
         if let prepared, prepared.deviceUID == deviceUID {

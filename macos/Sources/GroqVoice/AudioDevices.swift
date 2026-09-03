@@ -57,6 +57,28 @@ enum AudioDevices {
         return AudioObjectGetPropertyData(id, &address, 0, nil, &size, &value) == noErr && value != 0
     }
 
+    /// Bluetooth (classic or LE) input — AirPods and other headsets. Their
+    /// microphones are 8–16 kHz SCO and switching to them also degrades output.
+    static func isBluetooth(_ id: AudioDeviceID) -> Bool {
+        let t = transportType(id)
+        return t == kAudioDeviceTransportTypeBluetooth || t == kAudioDeviceTransportTypeBluetoothLE
+    }
+
+    /// The Mac's own microphone, if it has one.
+    static func builtInInputDevice() -> AudioInputDevice? {
+        inputDevices().first { transportType($0.id) == kAudioDeviceTransportTypeBuiltIn }
+    }
+
+    private static func transportType(_ id: AudioDeviceID) -> UInt32 {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var value = UInt32(0)
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectGetPropertyData(id, &address, 0, nil, &size, &value) == noErr ? value : 0
+    }
+
     static func name(of id: AudioDeviceID) -> String {
         stringProperty(id, kAudioObjectPropertyName) ?? "device \(id)"
     }

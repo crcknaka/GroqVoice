@@ -59,6 +59,7 @@ final class HotkeyMonitor {
     var onKeyDown: ((HotkeyKey) -> Void)?
     var onKeyUp: ((HotkeyKey) -> Void)?
     var onChordKey: (() -> Void)?      // another key pressed while a hotkey is held
+    var onEscape: (() -> Void)?        // Esc on its own (cancels a locked recording)
     var onScreenToggle: (() -> Void)?  // ⌃⌥⌘R — start/stop screen recording
 
     private var tap: CFMachPort?
@@ -157,6 +158,8 @@ final class HotkeyMonitor {
                 DispatchQueue.main.async { self.onScreenToggle?() }
             } else if !down.isEmpty {
                 DispatchQueue.main.async { self.onChordKey?() }
+            } else if keycode == 53, event.flags.intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift]).isEmpty {
+                DispatchQueue.main.async { self.onEscape?() }
             }
         default:
             break
