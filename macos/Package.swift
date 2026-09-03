@@ -5,13 +5,14 @@ let package = Package(
     name: "GroqVoice",
     platforms: [.macOS(.v14)],
     dependencies: [
-        .package(url: "https://github.com/argmaxinc/WhisperKit", from: "0.9.0")
+        // On-device ASR: Parakeet TDT 0.6B v3 compiled to CoreML (Neural Engine).
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.15.6")
     ],
     targets: [
         .executableTarget(
             name: "GroqVoice",
             dependencies: [
-                .product(name: "WhisperKit", package: "WhisperKit")
+                .product(name: "FluidAudio", package: "FluidAudio")
             ],
             path: "Sources/GroqVoice"
         )

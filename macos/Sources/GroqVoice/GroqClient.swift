@@ -57,9 +57,9 @@ final class GroqClient {
         }
     }
 
-    func chat(userText: String, systemPrompt: String) async throws -> String {
+    func chat(userText: String, systemPrompt: String, temperature: Double = 0.3) async throws -> String {
         try await withFallback(chain: chatChain, kind: "chat") { model in
-            try await self.chatOnce(userText: userText, model: model, systemPrompt: systemPrompt)
+            try await self.chatOnce(userText: userText, model: model, systemPrompt: systemPrompt, temperature: temperature)
         }
     }
 
@@ -156,7 +156,7 @@ final class GroqClient {
         return r.text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func chatOnce(userText: String, model: String, systemPrompt: String) async throws -> String {
+    private func chatOnce(userText: String, model: String, systemPrompt: String, temperature: Double) async throws -> String {
         let url = URL(string: "https://api.groq.com/openai/v1/chat/completions")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -166,7 +166,7 @@ final class GroqClient {
 
         let payload: [String: Any] = [
             "model": model,
-            "temperature": 0.3,
+            "temperature": temperature,
             "messages": [
                 ["role": "system", "content": systemPrompt],
                 ["role": "user", "content": userText],
