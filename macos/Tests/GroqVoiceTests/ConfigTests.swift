@@ -24,8 +24,8 @@ import Testing
         """
         let cfg = try JSONDecoder().decode(Config.self, from: Data(json.utf8))
         // Decoding keeps what the file says; Config.load() swaps the retired default.
-        #expect(cfg.chatModels == Config.legacyChatModels)
-        #expect(Config().chatModels.first == "openai/gpt-oss-120b")
+        #expect(Config.legacyChatModelLists.contains(cfg.chatModels))
+        #expect(Config().chatModels.first == "qwen/qwen3.8-27b")
     }
 
     @Test func translateKeyCannotCollideWithMainKey() {

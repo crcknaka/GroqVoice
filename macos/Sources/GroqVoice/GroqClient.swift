@@ -183,7 +183,7 @@ final class GroqClient {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.timeoutInterval = 25  // backstop: don't hang if the link dies mid-request
 
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "model": model,
             "temperature": temperature,
             "messages": [
@@ -191,6 +191,12 @@ final class GroqClient {
                 ["role": "user", "content": userText],
             ],
         ]
+        // gpt-oss "thinks" before answering and bills those tokens; our jobs
+        // (translate, clean up, short commands) don't need deep reasoning.
+        // Groq-only: other OpenAI-compatible servers may reject the field.
+        if url.host == "api.groq.com", model.hasPrefix("openai/gpt-oss") {
+            payload["reasoning_effort"] = "low"
+        }
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
         let (data, resp) = try await send(req)

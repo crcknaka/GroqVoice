@@ -5,10 +5,17 @@ struct Config: Codable {
     /// Priority order: strongest first. On a rate limit the next model is used;
     /// the stronger one is retried automatically once its cooldown expires.
     var transcriptionModels = ["whisper-large-v3", "whisper-large-v3-turbo"]
-    /// Checked against the live /models endpoint on 2026-09-03: the Llama 3.x
-    /// models are gone from Groq; these three are what's served now.
-    var chatModels = ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]
-    static let legacyChatModels = ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "llama-3.1-8b-instant"]
+    /// Checked against the live Groq API on 2026-09-03 (Llama 3.x is gone).
+    /// Qwen 3.8 27B goes first: on a one-sentence translation it answered in
+    /// 0.2 s using 130 tokens, where the gpt-oss models spend 0.5 s and
+    /// 300–400 tokens on hidden reasoning — and the free tier meters tokens
+    /// per minute. The stronger gpt-oss-120b stays as the fallback.
+    var chatModels = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+    /// Earlier defaults, swapped for the current one on load.
+    static let legacyChatModelLists = [
+        ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "llama-3.1-8b-instant"],
+        ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"],
+    ]
     /// Where chat completions go (task mode, clean-up, translation). Any
     /// OpenAI-compatible server works: Groq (default), Ollama on this Mac
     /// (http://localhost:11434/v1), LM Studio, OpenAI, OpenRouter, …
@@ -219,7 +226,7 @@ struct Config: Codable {
             // The old 1.0 s minimum silently swallowed one-word takes ("привет" ≈ 0.5 s).
             if cfg.minRecordingSeconds == 1.0 { cfg.minRecordingSeconds = Config().minRecordingSeconds }
             if cfg.releaseTailMs == 250 { cfg.releaseTailMs = Config().releaseTailMs }  // previous default, felt as lag
-            if cfg.chatModels == Config.legacyChatModels { cfg.chatModels = Config().chatModels }  // Llama 3.x left Groq
+            if Config.legacyChatModelLists.contains(cfg.chatModels) { cfg.chatModels = Config().chatModels }
             cfg.save()  // rewrite in the current schema (migrates legacy keys)
             return cfg
         }
