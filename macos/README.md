@@ -69,7 +69,10 @@ ditto GroqVoice.app /Applications/GroqVoice.app
 open /Applications/GroqVoice.app
 ```
 
-Нужны только Xcode Command Line Tools. Первая сборка тянет FluidAudio (~1–2 мин).
+Нужны только Xcode Command Line Tools. Первая сборка тянет FluidAudio (~1–2 мин). Иконка
+приложения рисуется скриптом `Resources/make-icns.sh` (AppKit + SF Symbol) и кладётся в бандл
+сборочным скриптом. Юнит-тесты (словарь, task-режим, WAV, миграция конфига): `./test.sh` —
+обёртка над `swift test`, которая на чистых Command Line Tools подсовывает Swift Testing.
 
 **Первый запуск.** Разреши Microphone и Accessibility (промпты откроются сами; Accessibility
 нужна для глобального хоткея и синтеза ⌘V). Приложение предложит скачать модель Parakeet

@@ -7,7 +7,8 @@
 - Движок по умолчанию — Parakeet TDT v3 через FluidAudio (локально, Neural Engine).
   Groq — облачная опция/фолбэк и LLM для task-режима и чистки транскрипта.
 - Сборка: `cd macos && ./build-app.sh` → `GroqVoice.app`; установка — `ditto` в `/Applications`.
-  Только Command Line Tools, без Xcode (`xcodebuild` недоступен).
+  Только Command Line Tools, без Xcode (`xcodebuild` недоступен). Тесты: `./test.sh` (Swift Testing;
+  XCTest в CLT нет). Иконка: `Resources/make-icns.sh`.
 - Подпись ad-hoc, но с designated requirement `identifier "com.abirzgals.groqvoice"`
   (см. `build-app.sh`), чтобы TCC-разрешения переживали пересборки. Если Accessibility всё же
   слетело: `tccutil reset Accessibility com.abirzgals.groqvoice` и перезапуск.

@@ -18,7 +18,7 @@ enum Reachability {
             )
             let queue = DispatchQueue(label: "groqvoice.reachability")
 
-            func finish(_ reachable: Bool) {
+            @Sendable func finish(_ reachable: Bool) {
                 once.lock.lock()
                 let already = once.done
                 once.done = true

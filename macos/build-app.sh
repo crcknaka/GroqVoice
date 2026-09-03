@@ -40,6 +40,9 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp "$BIN" "$APP/Contents/MacOS/GroqVoice"
 cp Info.plist "$APP/Contents/Info.plist"
+mkdir -p "$APP/Contents/Resources"
+[ -f Resources/AppIcon.icns ] || ./Resources/make-icns.sh
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 if [ "$MAKE_DIST" = 1 ]; then
   IDENTITY=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)"/\1/')

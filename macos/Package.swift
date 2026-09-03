@@ -15,6 +15,11 @@ let package = Package(
                 .product(name: "FluidAudio", package: "FluidAudio")
             ],
             path: "Sources/GroqVoice"
+        ),
+        .testTarget(
+            name: "GroqVoiceTests",
+            dependencies: ["GroqVoice"],
+            path: "Tests/GroqVoiceTests"
         )
     ]
 )
