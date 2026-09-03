@@ -15,7 +15,17 @@ import Testing
         #expect(cfg.sttEngine == "groq")      // legacy "off" meant cloud only
         #expect(cfg.pttHoldMs == 300)
         #expect(cfg.hotkey == "fn")            // default filled in
-        #expect(cfg.releaseTailMs == 250)
+        #expect(cfg.releaseTailMs == 150)
+    }
+
+    @Test func migratesRetiredGroqModelList() throws {
+        let json = """
+        {"chatModels":["llama-3.3-70b-versatile","openai/gpt-oss-120b","llama-3.1-8b-instant"]}
+        """
+        let cfg = try JSONDecoder().decode(Config.self, from: Data(json.utf8))
+        // Decoding keeps what the file says; Config.load() swaps the retired default.
+        #expect(cfg.chatModels == Config.legacyChatModels)
+        #expect(Config().chatModels.first == "openai/gpt-oss-120b")
     }
 
     @Test func translateKeyCannotCollideWithMainKey() {

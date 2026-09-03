@@ -188,7 +188,8 @@ extension AppController: NSMenuDelegate {
         settingsChanged()
         Log.write("engine → \(engine)")
         if !config.usesLocalEngine && config.groqApiKey.isEmpty {
-            settingsWindow.show(tab: 2)
+            menuShowSettings()
+            settingsWindow.selectTab(2)
         }
     }
 

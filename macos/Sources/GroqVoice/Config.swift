@@ -5,7 +5,10 @@ struct Config: Codable {
     /// Priority order: strongest first. On a rate limit the next model is used;
     /// the stronger one is retried automatically once its cooldown expires.
     var transcriptionModels = ["whisper-large-v3", "whisper-large-v3-turbo"]
-    var chatModels = ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "llama-3.1-8b-instant"]
+    /// Checked against the live /models endpoint on 2026-09-03: the Llama 3.x
+    /// models are gone from Groq; these three are what's served now.
+    var chatModels = ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]
+    static let legacyChatModels = ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "llama-3.1-8b-instant"]
     /// Where chat completions go (task mode, clean-up, translation). Any
     /// OpenAI-compatible server works: Groq (default), Ollama on this Mac
     /// (http://localhost:11434/v1), LM Studio, OpenAI, OpenRouter, …
@@ -28,8 +31,9 @@ struct Config: Codable {
     var pttHoldMs = 250.0
     var doubleTapWindowMs = 400.0
     /// Keep recording this long after the key is released so the last syllable
-    /// isn't clipped when the key comes up mid-word.
-    var releaseTailMs = 250.0
+    /// isn't clipped when the key comes up mid-word. Every millisecond here is
+    /// felt as latency, so keep it just above the audio pipeline's buffer.
+    var releaseTailMs = 150.0
     /// Login item. Off by default — enable from the menu.
     var autostart = false
 
@@ -214,6 +218,8 @@ struct Config: Codable {
            var cfg = try? JSONDecoder().decode(Config.self, from: data) {
             // The old 1.0 s minimum silently swallowed one-word takes ("привет" ≈ 0.5 s).
             if cfg.minRecordingSeconds == 1.0 { cfg.minRecordingSeconds = Config().minRecordingSeconds }
+            if cfg.releaseTailMs == 250 { cfg.releaseTailMs = Config().releaseTailMs }  // previous default, felt as lag
+            if cfg.chatModels == Config.legacyChatModels { cfg.chatModels = Config().chatModels }  // Llama 3.x left Groq
             cfg.save()  // rewrite in the current schema (migrates legacy keys)
             return cfg
         }

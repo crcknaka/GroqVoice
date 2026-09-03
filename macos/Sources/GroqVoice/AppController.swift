@@ -84,6 +84,9 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var spinnerAngle: CGFloat = 90
     private var flashTimer: Timer?
     private var tailTimer: Timer?
+    private var releasedAt: Date?
+    private var settingsWindowLoaded = false
+    private var historyWindowLoaded = false
 
     /// The push-to-talk key plus the translate key, when one is set.
     var monitoredKeys: Set<HotkeyKey> {
@@ -113,7 +116,10 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
         prepareRecorder()
 
-        history.onChange = { [weak self] in self?.historyWindow.reloadIfVisible() }
+        history.onChange = { [weak self] in
+            guard let self, self.historyWindowLoaded else { return }
+            self.historyWindow.reloadIfVisible()
+        }
 
         screenRecorder.onFinish = { [weak self] url in
             guard let self else { return }
@@ -353,6 +359,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     /// captures the last syllable. A new press within the tail cancels it.
     private func scheduleFinish() {
         tailTimer?.invalidate()
+        releasedAt = Date()
         let tail = max(0, config.releaseTailMs) / 1000
         guard tail > 0 else { finishRecording(); return }
         tailTimer = Timer.scheduledTimer(withTimeInterval: tail, repeats: false) { [weak self] _ in
@@ -415,10 +422,10 @@ final class AppController: NSObject, NSApplicationDelegate {
 
         phase = .processing
         setIcon(.processing)
-        prepareRecorder()
 
         let cfg = config
         let kind = takeKind
+        let released = releasedAt ?? Date()
         let vocabPrompt = vocabulary.prompt()
         let sttProbe = CloudProbe(host: "api.groq.com")
         let chatProbe = CloudProbe(host: cfg.chatHost, port: cfg.chatPort)
@@ -426,7 +433,9 @@ final class AppController: NSObject, NSApplicationDelegate {
         Task { [weak self] in
             guard let self else { return }
             do {
+                let sttStarted = Date()
                 var transcript = try await self.obtainTranscript(take: take, cfg: cfg, vocabPrompt: vocabPrompt, probe: sttProbe)
+                let sttSeconds = Date().timeIntervalSince(sttStarted)
                 Log.write("STT result: \"\(transcript)\"")
                 let aliased = self.vocabulary.applyAliases(to: transcript)
                 if !aliased.changes.isEmpty {
@@ -473,6 +482,8 @@ final class AppController: NSObject, NSApplicationDelegate {
                 let finalKind = historyKind
                 await MainActor.run {
                     Paster.deliver(finalText, mode: cfg.pasteModeValue, restoreClipboard: cfg.restoreClipboard)
+                    Log.write(String(format: "take: key released → pasted in %.2fs (tail %.0f ms, stt %.2fs)",
+                                     Date().timeIntervalSince(released), cfg.releaseTailMs, sttSeconds))
                     self.history.add(finalText, kind: finalKind)
                     self.finishProcessing(cfg: cfg)
                 }
@@ -493,6 +504,9 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
         phase = .idle
         setIcon(.ready)
+        // Prepare the next take's engine only now — doing it before the
+        // transcription started was adding ~100 ms to every dictation.
+        prepareRecorder()
     }
 
     /// Pastes the most recent history entry into the focused app again.
@@ -633,14 +647,23 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     // MARK: - Windows
 
-    @objc func menuShowSettings() { settingsWindow.show() }
-    @objc func menuShowHistory() { historyWindow.show() }
+    @objc func menuShowSettings() {
+        settingsWindowLoaded = true
+        settingsWindow.show()
+    }
+
+    @objc func menuShowHistory() {
+        historyWindowLoaded = true
+        historyWindow.show()
+    }
 
     /// Debug: `--snapshot-ui <dir>` renders the Settings tabs and the History
     /// window to PNGs and quits. Own windows can be captured without the
     /// Screen Recording permission.
     private func snapshotUI(to dir: URL) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        settingsWindowLoaded = true
+        historyWindowLoaded = true
         settingsWindow.show()
         historyWindow.show()
 
@@ -762,7 +785,7 @@ final class AppController: NSObject, NSApplicationDelegate {
                 flashIcon(.failed)
             }
         }
-        settingsWindow.refreshIfVisible()
+        if settingsWindowLoaded { settingsWindow.refreshIfVisible() }
     }
 
     private func startSpinner() {
