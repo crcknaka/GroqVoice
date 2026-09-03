@@ -83,11 +83,12 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
         let paste = NSButton(title: "Paste into Last App", target: self, action: #selector(pasteSelected))
         paste.keyEquivalent = "\r"
         let clear = NSButton(title: "Clear History…", target: self, action: #selector(clearHistory))
+        let fix = NSButton(title: "Add Vocabulary Term…", target: self, action: #selector(addTerm))
         countLabel.textColor = .secondaryLabelColor
         countLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let bottom = NSStackView(views: [countLabel, spacer, clear, copy, paste])
+        let bottom = NSStackView(views: [countLabel, spacer, fix, clear, copy, paste])
         bottom.orientation = .horizontal
         bottom.spacing = 8
 
@@ -146,7 +147,7 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
                 ])
                 return c
             }()
-            let symbol: String? = ["task": "sparkles", "translate": "globe", "edit": "pencil"][entry.kind]
+            let symbol: String? = ["task": "sparkles", "translate": "globe", "edit": "pencil", "snippet": "text.badge.plus"][entry.kind]
             cell.imageView?.image = symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: entry.kind) }
             cell.imageView?.contentTintColor = .secondaryLabelColor
             return cell
@@ -203,6 +204,11 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
             Paster.deliver(entry.text, mode: cfg.pasteModeValue, restoreClipboard: cfg.restoreClipboard)
             Log.write("pasted from history (\(entry.text.count) chars)")
         }
+    }
+
+    /// A word came out wrong in this entry? Teach the vocabulary right here.
+    @objc private func addTerm() {
+        QuickVocabularyAdd.run(app: app)
     }
 
     @objc private func clearHistory() {

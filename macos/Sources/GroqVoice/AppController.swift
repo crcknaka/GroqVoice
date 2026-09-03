@@ -67,6 +67,8 @@ final class AppController: NSObject, NSApplicationDelegate {
     var screenRecording = false
     lazy var settingsWindow = SettingsWindowController(app: self)
     lazy var historyWindow = HistoryWindowController(app: self)
+    lazy var dictionaryWindow = DictionaryWindowController(app: self)
+    var dictionaryWindowLoaded = false
 
     var phase: Phase = .idle
     var hotkeyStatus: HotkeyStatus = .needsAccessibility
@@ -465,7 +467,12 @@ final class AppController: NSObject, NSApplicationDelegate {
 
                 var output = transcript
                 var historyKind = "dictation"
-                if kind == .dictate, let selection {
+                if kind == .dictate, selection == nil, let expansion = self.snippets.expansion(for: transcript) {
+                    // The whole utterance is a snippet phrase: paste its text, no LLM.
+                    historyKind = "snippet"
+                    output = expansion
+                    Log.write("snippet → \"\(output.prefix(120).replacingOccurrences(of: "\n", with: "⏎"))\"")
+                } else if kind == .dictate, let selection {
                     // "задание: …" in front of an instruction is fine too — drop the keyword.
                     let spoken = TaskRouter.taskQuery(from: transcript, keywords: cfg.taskKeywords,
                                                       maxPosition: cfg.taskKeywordMaxWordPosition) ?? transcript
@@ -703,6 +710,18 @@ final class AppController: NSObject, NSApplicationDelegate {
         historyWindow.show()
     }
 
+    @objc func menuShowDictionary() {
+        dictionaryWindowLoaded = true
+        dictionaryWindow.show(.vocabulary)
+    }
+
+    @objc func menuShowSnippets() {
+        dictionaryWindowLoaded = true
+        dictionaryWindow.show(.snippets)
+    }
+
+    @objc func menuQuickAddTerm() { QuickVocabularyAdd.run(app: self) }
+
     /// Debug: `--snapshot-ui <dir>` renders the Settings tabs and the History
     /// window to PNGs and quits. Own windows can be captured without the
     /// Screen Recording permission.
@@ -710,8 +729,10 @@ final class AppController: NSObject, NSApplicationDelegate {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         settingsWindowLoaded = true
         historyWindowLoaded = true
+        dictionaryWindowLoaded = true
         settingsWindow.show()
         historyWindow.show()
+        dictionaryWindow.show()
 
         func capture(_ window: NSWindow?, _ name: String) {
             guard let window,
@@ -743,7 +764,16 @@ final class AppController: NSObject, NSApplicationDelegate {
                 historyWindow.window?.makeKeyAndOrderFront(nil)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                     capture(self.historyWindow.window, "history")
-                    exit(0)
+                    step += 1
+                    next()
+                }
+            case 4, 5:
+                dictionaryWindow.selectTab(step - 4)
+                dictionaryWindow.window?.makeKeyAndOrderFront(nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    capture(self.dictionaryWindow.window, "dictionary-\(step - 4)")
+                    step += 1
+                    next()
                 }
             default:
                 exit(0)

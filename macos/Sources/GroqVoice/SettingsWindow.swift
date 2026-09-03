@@ -279,7 +279,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             self.app.localSTT.warmUpInBackground(vocabularyFile: self.app.config.vocabularyBoosting ? Vocabulary.fileURL : nil)
             self.refresh()
         }
-        bindButton(editVocabButton) { NSWorkspace.shared.open(Vocabulary.fileURL) }
+        bindButton(editVocabButton) { [unowned self] in self.app.menuShowDictionary() }
         bindCheck(boostingCheck) { [unowned self] on in self.app.config.vocabularyBoosting = on }
         bindNumber(unloadField, min: 0, max: 1440) { [unowned self] v in self.app.config.localUnloadAfterMinutes = v }
         bindText(sttModelsField) { [unowned self] text in
@@ -296,7 +296,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         let parakeetGrid = grid([
             [label("Model:"), row(modelStatusLabel, downloadButton)],
             [label("Vocabulary:"), row(vocabLabel, editVocabButton)],
-            [empty(), hint("One entry per line: Term: alias, alias. Aliases are replaced by the term in the text — write what the recognizer actually produces.")],
+            [empty(), hint("Names and jargon with the misspellings the recognizer produces; they are replaced by the term. Edit in the Dictionary window or via “Add Vocabulary Term…” in the menu.")],
             [empty(), boostingCheck],
             [empty(), hint("Spots the terms in the audio with a second (English) model, ~106 MB. Off by default: with big vocabularies and Russian speech it makes false replacements.")],
             [label("Unload model after:"), row(unloadField, unit("min"), hint("0 = keep it warm in memory"))],
@@ -365,7 +365,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         promptView.autoresizingMask = [.width]
         promptView.textContainer?.widthTracksTextView = true
 
-        let editSnippets = button("Edit Snippets…") { NSWorkspace.shared.open(Snippets.fileURL) }
+        let editSnippets = button("Edit Snippets…") { [unowned self] in self.app.menuShowSnippets() }
 
         let accountGrid = grid([
             [label("Groq API key:"), row(apiKeyField, getKey)],

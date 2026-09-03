@@ -50,6 +50,16 @@ private func vocabulary(_ text: String) throws -> Vocabulary {
         #expect(v.applyAliases(to: "гитара и пушка, но гит и пуш").text == "гитара и пушка, но git и push")
     }
 
+    @Test func editsPreserveCommentsAndInsertUnderYourEntries() throws {
+        let v = try vocabulary("# head\n# Your entries\nGitHub: гитхаб\n\n# Stack\nDocker: докер\n")
+        v.add(term: "Coolify", aliases: ["кулифай", " кулифи "])
+        v.update(at: 2, term: "Docker", aliases: ["докер", "декер"])
+        v.remove(at: 0)
+        let file = try String(contentsOf: v.fileURL, encoding: .utf8)
+        #expect(file == "# head\n# Your entries\nCoolify: кулифай, кулифи\n\n# Stack\nDocker: докер, декер\n")
+        #expect(v.entries.map(\.term) == ["Coolify", "Docker"])
+    }
+
     @Test func doesNotTouchSubstringsInsideWords() throws {
         let v = try vocabulary("API: апи\n")
         #expect(v.applyAliases(to: "напиши апи и капитан").text == "напиши API и капитан")

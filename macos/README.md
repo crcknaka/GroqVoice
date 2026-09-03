@@ -18,6 +18,7 @@ Swift + AppKit, macOS 14+, Apple Silicon.
 | Начать с `задание: …` / `task: …` | Ответ LLM вместо транскрипта (нужен Groq-ключ или Apple Intelligence) |
 | **Hold клавишу перевода** (например Right ⌘) | Сказал по-русски — вставился английский (язык и клавиша в Settings; нужна LLM) |
 | Сказать «новая строка» / «абзац» / "new line" | Вместо слов вставляется перенос строки / пустая строка |
+| Сказать фразу-сниппет («моя подпись», «реквизиты») | Мгновенно вставляется заготовленный текст, без LLM |
 | **Выделить текст**, hold Fn, сказать «сделай короче» / «переведи на латышский» / «исправь ошибки» | Результат заменяет выделение (нужна LLM; иконка фиолетовая). Просто надиктованный текст тоже заменит выделение |
 | **Esc** во время записи | Отменить запись (в том числе залоченную) |
 | **⌃⌥⌘R** | Запись активного экрана → .mov на Рабочий стол |
@@ -59,6 +60,11 @@ Swift + AppKit, macOS 14+, Apple Silicon.
   (Base URL, ключ, модели) — например Ollama на этом же Маке; статус бэкенда и Apple
   Intelligence; чистка транскрипта; ключевые слова task-режима и их позиция; системный
   промпт task-режима; Edit Snippets.
+
+Окно **Dictionary & Snippets** — две вкладки-таблицы поверх тех же файлов (комментарии и
+порядок в файлах сохраняются): **Vocabulary** (как пишется / как слышится) и **Snippets**
+(что сказать / что вставить, многострочный текст, галка «инструкция для LLM»). Быстрый путь:
+пункт меню **Add Vocabulary Term…** с двумя полями, он же есть в окне History.
 
 Окно **History** — все диктовки с поиском; Copy, «Paste into Last App» (окно скрывается,
 фокус возвращается в приложение, откуда пришли, текст вставляется туда), двойной клик тоже
@@ -170,7 +176,8 @@ Docker и написать клиенту в Telegram»: без словаря �
 - `config.json` — все настройки (см. поля в `Config.swift`); меню пишет туда же.
 - `vocabulary.txt` — термины и имена, по строке, с алиасами: `Coolify: кулифай, кулифи`.
   См. раздел «Словарь».
-- `snippets.txt` — голосовые шорткаты task-режима (`команда = текст или инструкция`).
+- `snippets.txt` — сниппеты: `фраза = текст` (сказал фразу целиком → вставился текст, `\n` —
+  перенос строки) и `фраза => инструкция` (для LLM в task-режиме).
 - `history.jsonl` — последние 50 диктовок (меню Recent).
 - `log.txt` — лог с ротацией на 1 МБ.
 - `last.wav` — последняя запись (`"saveLastWav": false` чтобы не писать).
@@ -192,6 +199,7 @@ GroqVoice.app/Contents/MacOS/GroqVoice --snapshot-ui out/   # отрисоват
 | `AppController+Menu.swift` | меню (строится при каждом открытии) и его действия |
 | `SettingsWindow.swift` | окно Settings (три вкладки, live-apply) и главное меню для ⌘C/⌘V в полях |
 | `HistoryWindow.swift` | окно History: поиск, копирование, вставка в предыдущее приложение |
+| `DictionaryWindow.swift` | окно Dictionary & Snippets, диалог быстрого добавления термина |
 | `HotkeyMonitor.swift` | listen-only CGEventTap на несколько клавиш, `HotkeyKey` (Fn / Right ⌘ / …) |
 | `Recorder.swift` | AVAudioEngine → 16 kHz mono Int16 в памяти, выбор устройства |
 | `AudioDevices.swift` | CoreAudio: список входов, default, UID → ID |
@@ -203,7 +211,7 @@ GroqVoice.app/Contents/MacOS/GroqVoice --snapshot-ui out/   # отрисоват
 | `TaskRouter.swift` | детект task-режима, системные промпты (task, clean-up) |
 | `LocalLLM.swift` | Apple Foundation Models (macOS 26) как офлайн-LLM |
 | `Vocabulary.swift` | словарь: термины, алиасы → замена, prompt для Whisper, hot-reload |
-| `Snippets.swift` | голосовые шорткаты task-режима, hot-reload |
+| `Snippets.swift` | сниппеты: мгновенное раскрытие фразы, описание для LLM, правка файла |
 | `ScreenRecorder.swift` | ⌃⌥⌘R запись экрана |
 
 ## Privacy

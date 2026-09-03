@@ -22,6 +22,9 @@
   `~/Library/Application Support/FluidAudio/Models/`) — опция `vocabularyBoosting`, по
   умолчанию off: на русской речи с большим словарём даёт ложные замены.
 - Стартовый словарь — `DefaultVocabulary.swift`; у пользователя файл уже заполнен им.
+- Сниппеты (`Snippets.swift`): `фраза = текст` раскрывается мгновенно без LLM при точном совпадении
+  всей фразы, `фраза => инструкция` — только для LLM в task-режиме. Оба списка редактируются в окне
+  Dictionary (`DictionaryWindow.swift`), правки сохраняют комментарии и порядок в файлах.
 - Данные приложения: `~/Library/Application Support/GroqVoice/` (config.json, history.jsonl,
   vocabulary.txt, snippets.txt, log.txt, models/).
 - Headless-режимы для отладки: `--transcribe file.wav [--vocab terms.txt] [--boost]`, `--download-model`,

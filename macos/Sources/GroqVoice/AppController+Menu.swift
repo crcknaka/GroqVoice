@@ -33,6 +33,8 @@ extension AppController: NSMenuDelegate {
         menu.addItem(.separator())
 
         menu.addItem(item("Settings…", #selector(menuShowSettings), key: ","))
+        menu.addItem(item("Dictionary & Snippets…", #selector(menuShowDictionary)))
+        menu.addItem(item("Add Vocabulary Term…", #selector(menuQuickAddTerm)))
         menu.addItem(engineMenuItem())
         menu.addItem(hotkeyMenuItem())
         menu.addItem(microphoneMenuItem())
@@ -66,6 +68,7 @@ extension AppController: NSMenuDelegate {
                 case "task": row.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
                 case "translate": row.image = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)
                 case "edit": row.image = NSImage(systemSymbolName: "pencil", accessibilityDescription: nil)
+                case "snippet": row.image = NSImage(systemSymbolName: "text.badge.plus", accessibilityDescription: nil)
                 default: break
                 }
                 sub.addItem(row)
