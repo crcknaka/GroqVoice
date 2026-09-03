@@ -16,6 +16,7 @@ Swift + AppKit, macOS 14+, Apple Silicon.
 | **Double-tap Fn** | Lock: запись держится, любой следующий тап останавливает |
 | **Fn + другая клавиша** | OS-шорткат работает как обычно, запись отбрасывается |
 | Начать с `задание: …` / `task: …` | Ответ LLM вместо транскрипта (нужен Groq-ключ или Apple Intelligence) |
+| **Hold клавишу перевода** (например Right ⌘) | Сказал по-русски — вставился английский (язык и клавиша в Settings; нужна LLM) |
 | **⌃⌥⌘R** | Запись активного экрана → .mov на Рабочий стол |
 
 Граница «тап»/«hold» — 250 мс (`pttHoldMs`), окно двойного тапа — 400 мс (`doubleTapWindowMs`).
@@ -28,36 +29,34 @@ Swift + AppKit, macOS 14+, Apple Silicon.
 серый перечёркнутый микрофон = нет разрешения Accessibility, жёлтый треугольник на пару секунд =
 ошибка (подробности в логе). Никаких окон и оверлеев.
 
-### Меню
+### Меню и настройки
 
-Сверху вниз: что делает хоткей → **Recent** → движок и его настройки → LLM-дополнения →
-общие настройки → файлы → выход. Группа неактивного движка серая: при Parakeet недоступны
-настройки Groq Whisper, и наоборот.
+Меню в menu bar — только то, что переключают на ходу: статус хоткеев, **Recent** (клик копирует),
+**Paste Last Again**, **History…**, **Settings…** (⌘,), быстрые переключатели движка, хоткея,
+микрофона, языка и звука, Open Log, Record Screen, Quit.
 
-- **Recent** — последние 10 диктовок, клик копирует в буфер.
-- **Engine: …** — какой движок распознаёт речь: `Parakeet v3 — on this Mac` (по умолчанию)
-  или `Whisper via Groq — cloud`.
-- **Parakeet Settings** — статус модели и её загрузка, статус словаря, *Edit Vocabulary…*,
-  *Acoustic Term Spotting (experimental)*, галка *Fall Back to Groq Whisper if Parakeet Fails*
-  (работает только при наличии ключа).
-- **Groq Whisper Settings** — ключ API, *Fall Back to Parakeet When Offline or Rate-Limited*,
-  цепочка моделей.
-- **Groq LLM: Task Mode & Clean-Up** — независимо от движка: ключ API, *Clean Up Transcript*
-  (пунктуация, «эээ», написания из словаря; ответ подозрительной длины отбрасывается),
-  подсказка про task-режим, *Edit Snippets…*, цепочка моделей. Без ключа (или Apple
-  Intelligence на macOS 26) эти функции просто неактивны.
-- **Hotkey: …** — `Fn`, `Right ⌘`, `Right ⌥`, `Right ⌃`, `Left ⌃`. Для Fn нужно
-  System Settings → Keyboard → *Press 🌐 key to* → **Do Nothing**. Right ⌥ на латышской
-  раскладке занят под ā/ē.
-- **Microphone: …** — конкретное устройство или системный default (AirPods становятся
-  default автоматически, но их микрофон хуже встроенного).
-- **Language: …** — Auto-detect или фиксированный язык. Для Parakeet фиксация только
-  фильтрует алфавит (кириллица/латиница), для смешанной RU/EN речи оставляй Auto.
-- **Sound Feedback** — звуки старта/стопа записи и ошибки.
-- **Type Instead of Paste** — печатать клавишами вместо ⌘V (remote desktop и приложения,
-  где ⌘V не вставка).
-- **Launch at Login** — по умолчанию выключено.
-- **Open Config File / Open Log**, **Record Screen (⌃⌥⌘R)**.
+Всё остальное — в окне **Settings** (три вкладки, изменения применяются сразу, без OK):
+
+- **General** — клавиша push-to-talk; клавиша перевода и целевой язык; микрофон; язык
+  распознавания; способ вставки (⌘V или печать клавишами); восстановление буфера; звук;
+  автозапуск; хранить last.wav; тайминги (порог hold, окно двойного тапа, хвост после
+  отпускания, минимальная длина записи, порог тишины); размер истории; кнопки Open Log,
+  Open Data Folder, Reset to Defaults.
+- **Recognition** — движок (Parakeet или Whisper via Groq) и фолбэк. Ниже две группы:
+  **Parakeet** (статус/загрузка модели, словарь и кнопка редактирования, акустический
+  бустинг, выгрузка модели по простою) и **Whisper via Groq** (статус ключа, цепочка моделей).
+  Группа неактивного движка серая.
+- **Groq & LLM** — ключ Groq; chat endpoint: Groq или любой OpenAI-совместимый сервер
+  (Base URL, ключ, модели) — например Ollama на этом же Маке; статус бэкенда и Apple
+  Intelligence; чистка транскрипта; ключевые слова task-режима и их позиция; системный
+  промпт task-режима; Edit Snippets.
+
+Окно **History** — все диктовки с поиском; Copy, «Paste into Last App» (окно скрывается,
+фокус возвращается в приложение, откуда пришли, текст вставляется туда), двойной клик тоже
+вставляет; Clear History.
+
+Права доступа: если хоткей не работает, в меню вместо «Hold Fn to talk» будет
+«Hotkey inactive — permission missing» и пункт *Enable Accessibility for GroqVoice…*.
 
 ## Сборка и установка
 
@@ -76,12 +75,10 @@ open /Applications/GroqVoice.app
 нужна для глобального хоткея и синтеза ⌘V). Приложение предложит скачать модель Parakeet
 (~500 МБ, один раз). Groq-ключ не обязателен.
 
-**Если хоткей не реагирует** — открой меню: вместо «Hold Fn to talk» там будет
-«Hotkey inactive — permission missing» и пункт *Enable Accessibility for GroqVoice…*,
-который открывает нужную панель System Settings. Включи GroqVoice в списке; приложение
-подхватит разрешение само в течение пары секунд и покажет «Hotkey active». Если тумблер
-уже включён, а статус не меняется — удали GroqVoice из списка кнопкой «−», добавь заново
-и нажми *Relaunch GroqVoice*.
+**Если хоткей не реагирует** — в меню пункт *Enable Accessibility for GroqVoice…* открывает
+нужную панель System Settings. Включи GroqVoice в списке; приложение подхватит разрешение
+само в течение пары секунд. Если тумблер уже включён, а статус не меняется — удали GroqVoice
+из списка кнопкой «−», добавь заново и нажми *Relaunch GroqVoice*.
 
 **Про подпись.** Без Developer ID сборка подписывается ad-hoc. По умолчанию designated
 requirement у такой подписи — `cdhash` бинарника, и каждая пересборка сбрасывала бы доверие
@@ -112,7 +109,9 @@ Hugging Face в `~/Library/Application Support/GroqVoice/models/`, компил�
 У Parakeet нет параметра `prompt`, как у Whisper, поэтому словарь работает двумя механизмами:
 
 1. **Алиасы → замена в тексте.** Строка `Coolify: кулифай, кулифи` заменяет в транскрипте
-   любое из этих слов (целиком, без учёта регистра) на `Coolify`. Детерминированно, мгновенно,
+   любое из этих слов (целиком, без учёта регистра) на `Coolify`. Кириллические алиасы от
+   пяти букв ловят и падежные окончания до трёх букв: «в телеграмме» → «в Telegram»,
+   «на гитхабе» → «на GitHub». Детерминированно, мгновенно,
    работает для обоих движков. Просто пиши в алиасы то, что распознаватель реально выдаёт
    (смотри `STT result` в логе). Файл создаётся со стартовым набором (~60 терминов: свои
    проекты, хостинг и деплой, git, стек, сервисы, устройства) — шаблон в
@@ -132,6 +131,21 @@ Docker и написать клиенту в Telegram»: без словаря �
 Для Groq-движка канонические термины дополнительно уходят в `prompt` Whisper, а
 *Clean Up Transcript with LLM* получает их как предпочтительные написания.
 
+## LLM: перевод, task-режим, чистка
+
+Все три функции ходят в один chat endpoint (Settings → Groq & LLM). Варианты:
+
+- **Groq** (по умолчанию): самый быстрый, бесплатный tier достаточен, модели Llama 3.3 70B /
+  gpt-oss-120b с фолбэком по лимитам.
+- **Свой OpenAI-совместимый сервер**: Ollama или LM Studio на этом же Маке (например
+  `http://localhost:11434/v1`, модель `qwen3:8b`, без ключа), OpenAI, OpenRouter, Mistral и
+  т.д. Локальная модель 8B занимает 5–6 ГБ памяти пока загружена, батарею тратит только в
+  момент генерации (секунда-две на фразу); Ollama сам выгружает её после простоя.
+- **Apple Intelligence** (macOS 26, Foundation Models): встроенная модель ~3B, ничего не
+  качается, не расходует память приложения, используется автоматически как фолбэк, когда
+  доступна. Требует включённого Apple Intelligence в System Settings; официально русский не
+  входит в список её языков, для RU→EN перевода качество ниже облачных.
+
 ## Файлы
 
 `~/Library/Application Support/GroqVoice/`:
@@ -150,6 +164,7 @@ Docker и написать клиенту в Telegram»: без словаря �
 ```bash
 GroqVoice.app/Contents/MacOS/GroqVoice --download-model      # скачать/прогреть модель, распознать last.wav
 GroqVoice.app/Contents/MacOS/GroqVoice --transcribe file.wav [--vocab terms.txt] [--boost]  # распознать 16 kHz mono WAV локально
+GroqVoice.app/Contents/MacOS/GroqVoice --snapshot-ui out/   # отрисовать Settings и History в PNG и выйти
 ```
 
 ## Архитектура
@@ -158,7 +173,9 @@ GroqVoice.app/Contents/MacOS/GroqVoice --transcribe file.wav [--vocab terms.txt]
 |---|---|
 | `AppController.swift` | стейт-машина хоткея (tap/hold/lock), пайплайн запись → STT → paste, роутинг движков |
 | `AppController+Menu.swift` | меню (строится при каждом открытии) и его действия |
-| `HotkeyMonitor.swift` | listen-only CGEventTap, `HotkeyKey` (Fn / Right ⌘ / …) |
+| `SettingsWindow.swift` | окно Settings (три вкладки, live-apply) и главное меню для ⌘C/⌘V в полях |
+| `HistoryWindow.swift` | окно History: поиск, копирование, вставка в предыдущее приложение |
+| `HotkeyMonitor.swift` | listen-only CGEventTap на несколько клавиш, `HotkeyKey` (Fn / Right ⌘ / …) |
 | `Recorder.swift` | AVAudioEngine → 16 kHz mono Int16 в памяти, выбор устройства |
 | `AudioDevices.swift` | CoreAudio: список входов, default, UID → ID |
 | `LocalSTT.swift` | Parakeet v3 через FluidAudio: загрузка, прогрев, распознавание, CTC-бустинг словаря |

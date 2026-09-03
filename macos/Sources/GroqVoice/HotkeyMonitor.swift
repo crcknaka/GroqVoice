@@ -1,6 +1,6 @@
 import Cocoa
 
-/// Keys that can serve as the push-to-talk trigger. All are modifiers, so
+/// Keys that can serve as push-to-talk triggers. All are modifiers, so
 /// holding one never types anything and the rest of the keyboard keeps working.
 enum HotkeyKey: String, CaseIterable {
     case fn, rightCommand, rightOption, rightControl, leftControl
@@ -47,25 +47,26 @@ enum HotkeyKey: String, CaseIterable {
     }
 }
 
-/// Global hotkey monitor via a listen-only CGEventTap. Emits raw down/up
-/// events on the main queue; the tap/hold/lock state machine lives in
-/// AppController. Requires Accessibility permission.
+/// Global hotkey monitor via a listen-only CGEventTap. Watches any number of
+/// modifier keys and reports which one went down or up, on the main queue;
+/// the tap/hold/lock state machine lives in AppController.
+/// Requires Accessibility permission.
 final class HotkeyMonitor {
-    var key: HotkeyKey {
-        didSet { isDown = false }
+    var keys: Set<HotkeyKey> {
+        didSet { down.removeAll() }
     }
 
-    var onKeyDown: (() -> Void)?
-    var onKeyUp: (() -> Void)?
-    var onChordKey: (() -> Void)?      // another key pressed while the hotkey is held
+    var onKeyDown: ((HotkeyKey) -> Void)?
+    var onKeyUp: ((HotkeyKey) -> Void)?
+    var onChordKey: (() -> Void)?      // another key pressed while a hotkey is held
     var onScreenToggle: (() -> Void)?  // ⌃⌥⌘R — start/stop screen recording
 
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    private var isDown = false
+    private var down: Set<HotkeyKey> = []
 
-    init(key: HotkeyKey) {
-        self.key = key
+    init(keys: Set<HotkeyKey>) {
+        self.keys = keys
     }
 
     func start() -> Bool {
@@ -102,7 +103,17 @@ final class HotkeyMonitor {
         if let runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes) }
         tap = nil
         runLoopSource = nil
-        isDown = false
+        down.removeAll()
+    }
+
+    private func emitDown(_ key: HotkeyKey) {
+        down.insert(key)
+        DispatchQueue.main.async { self.onKeyDown?(key) }
+    }
+
+    private func emitUp(_ key: HotkeyKey) {
+        down.remove(key)
+        DispatchQueue.main.async { self.onKeyUp?(key) }
     }
 
     private func handle(type: CGEventType, event: CGEvent) {
@@ -114,47 +125,37 @@ final class HotkeyMonitor {
         switch type {
         case .flagsChanged:
             let keycode = event.getIntegerValueField(.keyboardEventKeycode)
-            let flagOn = event.flags.contains(key.flag)
-            if key == .fn {
-                // Fn has no sibling key sharing its flag, and its keycode differs
-                // between keyboards (63, or 179 on Globe-key models) — so trust
-                // the flag transition itself.
-                if flagOn && !isDown {
-                    isDown = true
-                    DispatchQueue.main.async { self.onKeyDown?() }
-                } else if !flagOn && isDown {
-                    isDown = false
-                    DispatchQueue.main.async { self.onKeyUp?() }
+            for key in keys {
+                let flagOn = event.flags.contains(key.flag)
+                let isDown = down.contains(key)
+                if key == .fn {
+                    // Fn has no sibling key sharing its flag, and its keycode
+                    // differs between keyboards (63, or 179 on Globe-key models),
+                    // so trust the flag transition itself.
+                    if flagOn && !isDown { emitDown(key) } else if !flagOn && isDown { emitUp(key) }
+                    continue
                 }
-                return
-            }
-            if keycode == key.keyCode {
-                // Modifiers send exactly one flagsChanged on press and one on
-                // release, so toggle on our own keycode. This stays correct
-                // even when the sibling key (e.g. Left ⌘ while Right ⌘ is the
-                // hotkey) keeps the shared flag bit set.
-                if !isDown && flagOn {
-                    isDown = true
-                    DispatchQueue.main.async { self.onKeyDown?() }
-                } else if isDown {
-                    isDown = false
-                    DispatchQueue.main.async { self.onKeyUp?() }
+                if keycode == key.keyCode {
+                    // Modifiers send exactly one flagsChanged on press and one on
+                    // release, so toggle on our own keycode. This stays correct
+                    // even when the sibling key (e.g. Left ⌘ while Right ⌘ is the
+                    // hotkey) keeps the shared flag bit set.
+                    if !isDown && flagOn { emitDown(key) } else if isDown { emitUp(key) }
+                } else if isDown && !flagOn {
+                    // We missed the release (tap was disabled for a moment) — resync.
+                    emitUp(key)
                 }
-            } else if isDown && !flagOn {
-                // We missed the release (tap was disabled for a moment) — resync.
-                isDown = false
-                DispatchQueue.main.async { self.onKeyUp?() }
             }
         case .keyDown:
             // ⌃⌥⌘R (R = 0x0F) toggles screen recording — an uncommon combo,
-            // checked independently of the hotkey.
+            // checked independently of the hotkeys.
             let mods: CGEventFlags = [.maskControl, .maskAlternate, .maskCommand]
             let keycode = event.getIntegerValueField(.keyboardEventKeycode)
             if keycode == 0x0F,
                event.flags.contains(mods),
                !event.flags.contains(.maskShift) {
                 DispatchQueue.main.async { self.onScreenToggle?() }
-            } else if isDown {
+            } else if !down.isEmpty {
                 DispatchQueue.main.async { self.onChordKey?() }
             }
         default:

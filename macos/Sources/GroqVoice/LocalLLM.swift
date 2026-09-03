@@ -17,6 +17,19 @@ enum LocalLLM {
         return false
     }
 
+    /// Human-readable availability, e.g. "available" or "unavailable: Apple Intelligence is not enabled".
+    static var statusDescription: String {
+        #if canImport(FoundationModels)
+        if #available(macOS 26.0, *) {
+            switch SystemLanguageModel.default.availability {
+            case .available: return "available"
+            case .unavailable(let reason): return "unavailable: \(reason)"
+            }
+        }
+        #endif
+        return "unavailable: needs macOS 26"
+    }
+
     static func respond(system: String, user: String) async throws -> String {
         #if canImport(FoundationModels)
         if #available(macOS 26.0, *) {

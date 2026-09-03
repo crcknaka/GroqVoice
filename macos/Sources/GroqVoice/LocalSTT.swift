@@ -31,7 +31,7 @@ final class LocalSTT {
     private var manager: AsrManager?
     private var loadTask: Task<AsrManager, Error>?
     private var unloadTimer: Timer?
-    private let unloadAfterSeconds: TimeInterval  // 0 = keep warm forever
+    private var unloadAfterSeconds: TimeInterval  // 0 = keep warm forever
 
     // Vocabulary boosting: a second, small CTC model (Parakeet CTC 110M, ~106 MB,
     // English token set) spots the user's terms acoustically and a rescorer
@@ -50,6 +50,15 @@ final class LocalSTT {
 
     init(unloadAfterMinutes: Double) {
         unloadAfterSeconds = unloadAfterMinutes <= 0 ? 0 : max(60, unloadAfterMinutes * 60)
+    }
+
+    /// Applies a new idle-unload setting; 0 keeps the model warm (and cancels a pending unload).
+    func setUnloadAfterMinutes(_ minutes: Double) {
+        unloadAfterSeconds = minutes <= 0 ? 0 : max(60, minutes * 60)
+        if unloadAfterSeconds == 0 {
+            unloadTimer?.invalidate()
+            unloadTimer = nil
+        }
     }
 
     var isModelDownloaded: Bool {

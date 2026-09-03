@@ -20,7 +20,11 @@ final class History {
     static var fileURL: URL { Config.supportDir.appendingPathComponent("history.jsonl") }
 
     /// Oldest first.
-    private(set) var entries: [HistoryEntry] = []
+    private(set) var entries: [HistoryEntry] = [] {
+        didSet { onChange?() }
+    }
+    /// Called on the main thread after any change.
+    var onChange: (() -> Void)?
     private let limit: Int
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()

@@ -8,13 +8,21 @@ struct AppError: LocalizedError {
     var errorDescription: String? { message }
 }
 
-/// Answers "is the Groq API reachable?" once per take, lazily, so the probe
+/// Answers "is this server reachable?" once per take, lazily, so the probe
 /// only costs time on the paths that actually need the network.
 final class CloudProbe {
+    private let host: String
+    private let port: UInt16
     private var cached: Bool?
+
+    init(host: String, port: UInt16 = 443) {
+        self.host = host
+        self.port = port
+    }
+
     func reachable() async -> Bool {
         if let cached { return cached }
-        let result = await Reachability.canReach(host: "api.groq.com")
+        let result = await Reachability.canReach(host: host, port: port)
         cached = result
         return result
     }
@@ -29,10 +37,18 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     enum IconState: Equatable {
         case inactive       // hotkey not running (permission missing)
-        case ready, recording, locked, processing, screenRecording
+        case ready, recording, translating, locked, processing, screenRecording
         case failed         // brief flash after an error
         case copied         // brief flash after copying from Recent
     }
+
+    enum HotkeyStatus: Equatable {
+        case active
+        case needsAccessibility     // AXIsProcessTrusted() is false
+        case needsInputMonitoring   // trusted, but the listen-only tap still failed
+    }
+
+    enum TakeKind { case dictate, translate }
 
     var statusItem: NSStatusItem!
     var config = Config.load()
@@ -42,23 +58,23 @@ final class AppController: NSObject, NSApplicationDelegate {
     lazy var history = History(limit: config.historySize)
     lazy var groq = GroqClient(apiKey: config.groqApiKey,
                                transcriptionModels: config.transcriptionModels,
-                               chatModels: config.chatModels)
+                               chatModels: config.chatModels,
+                               chatBaseURL: config.chatBaseURL,
+                               chatApiKey: config.effectiveChatApiKey)
     lazy var localSTT = LocalSTT(unloadAfterMinutes: config.localUnloadAfterMinutes)
-    lazy var hotkey = HotkeyMonitor(key: config.hotkeyKey)
+    lazy var hotkey = HotkeyMonitor(keys: monitoredKeys)
     let screenRecorder = ScreenRecorder()
     var screenRecording = false
-
-    enum HotkeyStatus: Equatable {
-        case active
-        case needsAccessibility     // AXIsProcessTrusted() is false
-        case needsInputMonitoring   // trusted, but the listen-only tap still failed
-    }
+    lazy var settingsWindow = SettingsWindowController(app: self)
+    lazy var historyWindow = HistoryWindowController(app: self)
 
     var phase: Phase = .idle
     var hotkeyStatus: HotkeyStatus = .needsAccessibility
-    /// Menu text for the local model row ("downloading 42%", "compiling…").
+    /// Menu/settings text for the local model row ("downloading 42%", "compiling…").
     var localModelStatus: String?
 
+    private var takeKind: TakeKind = .dictate
+    private var activeKey: HotkeyKey?
     private var keyDownAt: Date?
     private var lastQuickTapAt: Date?
     private var chordCancelled = false
@@ -69,16 +85,25 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var flashTimer: Timer?
     private var tailTimer: Timer?
 
+    /// The push-to-talk key plus the translate key, when one is set.
+    var monitoredKeys: Set<HotkeyKey> {
+        var keys: Set<HotkeyKey> = [config.hotkeyKey]
+        if let translate = config.translateHotkeyKey { keys.insert(translate) }
+        return keys
+    }
+
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        Log.write("=== GroqVoice for macOS started (engine: \(config.sttEngine), hotkey: \(config.hotkey)) ===")
+        Log.write("=== GroqVoice for macOS started (engine: \(config.sttEngine), hotkey: \(config.hotkey), translate: \(config.translateHotkey.isEmpty ? "off" : config.translateHotkey)) ===")
+        Log.write("Apple Intelligence: \(LocalLLM.statusDescription)")
+        NSApp.mainMenu = MainMenu.build(app: self)
         setupStatusItem()
         setIcon(.inactive)
 
         requestMicAccess()
         startHotkeyWhenTrusted()
-        syncAutostart()
+        syncLoginItem()
 
         localSTT.onStage = { [weak self] stage in self?.showLocalStage(stage) }
 
@@ -87,6 +112,8 @@ final class AppController: NSObject, NSApplicationDelegate {
             self.finishRecording()
         }
         prepareRecorder()
+
+        history.onChange = { [weak self] in self?.historyWindow.reloadIfVisible() }
 
         screenRecorder.onFinish = { [weak self] url in
             guard let self else { return }
@@ -106,11 +133,32 @@ final class AppController: NSObject, NSApplicationDelegate {
             // first dictation is instant.
             localSTT.warmUpInBackground(vocabularyFile: config.vocabularyBoosting ? Vocabulary.fileURL : nil)
         }
+
+        if let flag = CommandLine.arguments.firstIndex(of: "--snapshot-ui") {
+            let dir = CommandLine.arguments.count > flag + 1 ? CommandLine.arguments[flag + 1] : "."
+            snapshotUI(to: URL(fileURLWithPath: dir))
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         hotkey.stop()
         Log.write("=== GroqVoice quit ===")
+    }
+
+    /// Called by the Settings window (and the quick-toggle menu) after they
+    /// wrote to `config`: persists it and re-applies everything that has
+    /// runtime state.
+    func settingsChanged() {
+        config.save()
+        groq.apply(config)
+        hotkey.keys = monitoredKeys
+        localSTT.setUnloadAfterMinutes(config.localUnloadAfterMinutes)
+        prepareRecorder()
+        if config.usesLocalEngine {
+            localSTT.warmUpInBackground(vocabularyFile: config.vocabularyBoosting ? Vocabulary.fileURL : nil)
+        }
+        syncLoginItem()
+        if case .idle = phase { setIcon(.ready) }
     }
 
     // MARK: - Permissions & first run
@@ -162,7 +210,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             hotkeyStatus = .active
             wireHotkey()
             if case .idle = phase { setIcon(.ready) }
-            Log.write("event tap started (\(config.hotkeyKey.title) monitor active)")
+            Log.write("event tap started (\(monitoredKeys.map(\.title).sorted().joined(separator: ", ")) monitor active)")
             return true
         } else {
             hotkeyStatus = .needsInputMonitoring
@@ -193,17 +241,22 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Mirrors config.autostart into SMAppService (Login Items). Registers only
-    /// from .notRegistered so a user who disabled us in System Settings
-    /// (.requiresApproval) isn't re-nagged on every launch.
-    private func syncAutostart() {
-        let status = SMAppService.mainApp.status
-        guard config.autostart, status == .notRegistered else { return }
+    /// Makes the Login Items registration match `config.autostart`.
+    func syncLoginItem() {
+        let enabled = SMAppService.mainApp.status == .enabled
+        guard enabled != config.autostart else { return }
         do {
-            try SMAppService.mainApp.register()
-            Log.write("launch-at-login registered")
+            if config.autostart {
+                try SMAppService.mainApp.register()
+                Log.write("launch-at-login enabled")
+            } else {
+                try SMAppService.mainApp.unregister()
+                Log.write("launch-at-login disabled")
+            }
         } catch {
-            Log.write("launch-at-login registration failed: \(error.localizedDescription)")
+            Log.write("launch-at-login change failed: \(error.localizedDescription)")
+            config.autostart = enabled
+            config.save()
         }
     }
 
@@ -229,36 +282,39 @@ final class AppController: NSObject, NSApplicationDelegate {
     // MARK: - Hotkey state machine
 
     private func wireHotkey() {
-        hotkey.onKeyDown = { [weak self] in self?.keyDown() }
-        hotkey.onKeyUp = { [weak self] in self?.keyUp() }
+        hotkey.onKeyDown = { [weak self] key in self?.keyDown(key) }
+        hotkey.onKeyUp = { [weak self] key in self?.keyUp(key) }
         hotkey.onChordKey = { [weak self] in self?.chordKey() }
         hotkey.onScreenToggle = { [weak self] in self?.toggleScreenRecording() }
     }
 
-    private func keyDown() {
+    private func keyDown(_ key: HotkeyKey) {
         switch phase {
         case .recording(locked: true):
-            // Any press stops a locked recording.
+            // The key that started a locked recording also stops it.
+            guard key == activeKey else { return }
             ignoreNextKeyUp = true
             scheduleFinish()
         case .idle:
+            activeKey = key
+            takeKind = key == config.translateHotkeyKey ? .translate : .dictate
             keyDownAt = Date()
             chordCancelled = false
             startRecording(locked: false)
         case .recording(locked: false):
             // Pressed again during the release tail: keep the same take going.
-            if tailTimer != nil {
-                tailTimer?.invalidate()
-                tailTimer = nil
-                keyDownAt = Date()
-                chordCancelled = false
-            }
+            guard key == activeKey, tailTimer != nil else { return }
+            tailTimer?.invalidate()
+            tailTimer = nil
+            keyDownAt = Date()
+            chordCancelled = false
         case .processing:
             break
         }
     }
 
-    private func keyUp() {
+    private func keyUp(_ key: HotkeyKey) {
+        guard key == activeKey else { return }
         if ignoreNextKeyUp {
             ignoreNextKeyUp = false
             return
@@ -316,9 +372,9 @@ final class AppController: NSObject, NSApplicationDelegate {
         do {
             try recorder.start(deviceUID: config.inputDeviceUID)
             phase = .recording(locked: locked)
-            setIcon(.recording)
+            setIcon(takeKind == .translate ? .translating : .recording)
             playSound("Pop")
-            Log.write("recording started")
+            Log.write("recording started (\(takeKind == .translate ? "translate" : "dictate"))")
         } catch {
             phase = .idle
             flashIcon(.failed)
@@ -362,13 +418,15 @@ final class AppController: NSObject, NSApplicationDelegate {
         prepareRecorder()
 
         let cfg = config
+        let kind = takeKind
         let vocabPrompt = vocabulary.prompt()
-        let probe = CloudProbe()
+        let sttProbe = CloudProbe(host: "api.groq.com")
+        let chatProbe = CloudProbe(host: cfg.chatHost, port: cfg.chatPort)
 
         Task { [weak self] in
             guard let self else { return }
             do {
-                var transcript = try await self.obtainTranscript(take: take, cfg: cfg, vocabPrompt: vocabPrompt, probe: probe)
+                var transcript = try await self.obtainTranscript(take: take, cfg: cfg, vocabPrompt: vocabPrompt, probe: sttProbe)
                 Log.write("STT result: \"\(transcript)\"")
                 let aliased = self.vocabulary.applyAliases(to: transcript)
                 if !aliased.changes.isEmpty {
@@ -380,15 +438,25 @@ final class AppController: NSObject, NSApplicationDelegate {
                 }
 
                 var output = transcript
-                var kind = "dictation"
-                if let query = TaskRouter.taskQuery(from: transcript,
-                                                    keywords: cfg.taskKeywords,
-                                                    maxPosition: cfg.taskKeywordMaxWordPosition) {
-                    kind = "task"
+                var historyKind = "dictation"
+                if kind == .translate {
+                    historyKind = "translate"
+                    let system = TaskRouter.translateSystemPrompt(to: cfg.translateLanguageName)
+                    guard let translated = await self.obtainChatAnswer(query: transcript, system: system, cfg: cfg,
+                                                                       probe: chatProbe, temperature: 0),
+                          !translated.isEmpty else {
+                        throw AppError("No language model for translation — configure one in Settings → Groq & LLM")
+                    }
+                    output = translated
+                    Log.write("translated → \(cfg.translateLanguage): \"\(output.prefix(200))\"")
+                } else if let query = TaskRouter.taskQuery(from: transcript,
+                                                           keywords: cfg.taskKeywords,
+                                                           maxPosition: cfg.taskKeywordMaxWordPosition) {
+                    historyKind = "task"
                     Log.write("task mode → chat: \"\(query)\"")
                     let base = cfg.taskSystemPrompt.isEmpty ? TaskRouter.defaultSystemPrompt : cfg.taskSystemPrompt
                     let system = base + self.snippets.systemPromptSection()
-                    if let answer = await self.obtainChatAnswer(query: query, system: system, cfg: cfg, probe: probe),
+                    if let answer = await self.obtainChatAnswer(query: query, system: system, cfg: cfg, probe: chatProbe),
                        !answer.isEmpty {
                         output = answer
                         Log.write("chat result: \"\(output.prefix(200))\"")
@@ -398,11 +466,11 @@ final class AppController: NSObject, NSApplicationDelegate {
                         throw AppError("No language model available for task mode")
                     }
                 } else if cfg.cleanupTranscript {
-                    output = await self.cleanup(transcript, vocabulary: vocabPrompt, cfg: cfg, probe: probe)
+                    output = await self.cleanup(transcript, vocabulary: vocabPrompt, cfg: cfg, probe: chatProbe)
                 }
 
                 let finalText = output
-                let finalKind = kind
+                let finalKind = historyKind
                 await MainActor.run {
                     Paster.deliver(finalText, mode: cfg.pasteModeValue, restoreClipboard: cfg.restoreClipboard)
                     self.history.add(finalText, kind: finalKind)
@@ -427,6 +495,13 @@ final class AppController: NSObject, NSApplicationDelegate {
         setIcon(.ready)
     }
 
+    /// Pastes the most recent history entry into the focused app again.
+    func pasteLastAgain() {
+        guard let entry = history.latest else { return }
+        Log.write("paste last again (\(entry.text.count) chars)")
+        Paster.deliver(entry.text, mode: config.pasteModeValue, restoreClipboard: config.restoreClipboard)
+    }
+
     /// STT routing between the on-device engine and Groq, honouring
     /// `sttEngine` and `sttFallback`. The first dictation on a fresh install
     /// goes to Groq (if a key is set) while Parakeet downloads in the
@@ -439,13 +514,14 @@ final class AppController: NSObject, NSApplicationDelegate {
             return try await groq.transcribe(wav: take.wav, language: cfg.language, prompt: vocabPrompt)
         }
         func local() async throws -> String {
-            try await localSTT.transcribe(pcm16: take.pcm, language: cfg.language, vocabularyFile: cfg.vocabularyBoosting ? Vocabulary.fileURL : nil)
+            try await localSTT.transcribe(pcm16: take.pcm, language: cfg.language,
+                                          vocabularyFile: cfg.vocabularyBoosting ? Vocabulary.fileURL : nil)
         }
 
         if cfg.usesLocalEngine {
             if !localSTT.isModelDownloaded, cfg.sttFallback, hasKey, await probe.reachable() {
                 Log.write("STT: local model not downloaded yet → Groq for this take, model downloading in background")
-                localSTT.warmUpInBackground(vocabularyFile: config.vocabularyBoosting ? Vocabulary.fileURL : nil)
+                localSTT.warmUpInBackground(vocabularyFile: cfg.vocabularyBoosting ? Vocabulary.fileURL : nil)
                 return try await cloud()
             }
             do {
@@ -457,7 +533,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         } else {
             guard hasKey else {
                 guard cfg.sttFallback else {
-                    throw AppError("Groq API key is not set — add it in the menu or switch to the on-device engine")
+                    throw AppError("Groq API key is not set — add it in Settings or switch to the on-device engine")
                 }
                 return try await local()
             }
@@ -474,18 +550,19 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Chat routing for task mode and clean-up. Groq is preferred whenever
-    /// reachable (stronger models); Apple's on-device model is the fallback.
+    /// Chat routing for task mode, translation and clean-up. The configured
+    /// endpoint (Groq or a custom OpenAI-compatible server) is preferred
+    /// whenever reachable; Apple's on-device model is the fallback.
     /// Returns nil if no backend answered.
     private func obtainChatAnswer(query: String, system: String, cfg: Config, probe: CloudProbe,
                                   temperature: Double = 0.3) async -> String? {
-        let hasKey = !cfg.groqApiKey.isEmpty
-        let reachable = hasKey ? await probe.reachable() : false
+        let configured = cfg.llmConfigured
+        let reachable = configured ? await probe.reachable() : false
         if reachable {
             do {
                 return try await groq.chat(userText: query, systemPrompt: system, temperature: temperature)
             } catch {
-                Log.write("chat: Groq failed (\(error.localizedDescription.prefix(120)))")
+                Log.write("chat: \(cfg.chatHost) failed (\(error.localizedDescription.prefix(120)))")
             }
         }
         if LocalLLM.isAvailable {
@@ -496,12 +573,12 @@ final class AppController: NSObject, NSApplicationDelegate {
                 Log.write("chat: local model failed: \(error.localizedDescription)")
             }
         }
-        // The probe may have been a transient false negative — try Groq anyway.
-        if hasKey && !reachable {
+        // The probe may have been a transient false negative — try anyway.
+        if configured && !reachable {
             do {
                 return try await groq.chat(userText: query, systemPrompt: system, temperature: temperature)
             } catch {
-                Log.write("chat: Groq last-resort failed (\(error.localizedDescription.prefix(120)))")
+                Log.write("chat: \(cfg.chatHost) last-resort failed (\(error.localizedDescription.prefix(120)))")
             }
         }
         return nil
@@ -533,9 +610,9 @@ final class AppController: NSObject, NSApplicationDelegate {
         let text = error.localizedDescription
         if let groq = error as? GroqError {
             switch groq.status {
-            case 401: return "Groq: invalid API key"
-            case 429: return "Groq: rate limit — try again in a moment"
-            default: return "Groq HTTP \(groq.status)"
+            case 401: return "Invalid API key"
+            case 429: return "Rate limit — try again in a moment"
+            default: return "HTTP \(groq.status)"
             }
         }
         if let url = error as? URLError {
@@ -552,6 +629,58 @@ final class AppController: NSObject, NSApplicationDelegate {
     func playSound(_ name: String) {
         guard config.playFeedbackSounds else { return }
         NSSound(named: name)?.play()
+    }
+
+    // MARK: - Windows
+
+    @objc func menuShowSettings() { settingsWindow.show() }
+    @objc func menuShowHistory() { historyWindow.show() }
+
+    /// Debug: `--snapshot-ui <dir>` renders the Settings tabs and the History
+    /// window to PNGs and quits. Own windows can be captured without the
+    /// Screen Recording permission.
+    private func snapshotUI(to dir: URL) {
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        settingsWindow.show()
+        historyWindow.show()
+
+        func capture(_ window: NSWindow?, _ name: String) {
+            guard let window,
+                  let cg = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber),
+                                                   [.boundsIgnoreFraming, .bestResolution]) else {
+                print("capture failed: \(name)")
+                return
+            }
+            let rep = NSBitmapImageRep(cgImage: cg)
+            if let png = rep.representation(using: .png, properties: [:]) {
+                let url = dir.appendingPathComponent(name + ".png")
+                try? png.write(to: url)
+                print("wrote \(url.path) (\(cg.width)×\(cg.height))")
+            }
+        }
+
+        var step = 0
+        func next() {
+            switch step {
+            case 0..<3:
+                settingsWindow.selectTab(step)
+                settingsWindow.window?.makeKeyAndOrderFront(nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    capture(self.settingsWindow.window, "settings-\(step)")
+                    step += 1
+                    next()
+                }
+            case 3:
+                historyWindow.window?.makeKeyAndOrderFront(nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    capture(self.historyWindow.window, "history")
+                    exit(0)
+                }
+            default:
+                exit(0)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { next() }
     }
 
     // MARK: - Status item icon
@@ -577,6 +706,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             case .inactive: return ("mic.slash", .systemGray)
             case .ready: return ("mic", nil)
             case .recording: return ("mic.fill", .systemRed)
+            case .translating: return ("mic.fill", .systemBlue)
             case .locked: return ("mic.fill", .systemOrange)
             case .processing: return ("hourglass", .systemYellow)
             case .screenRecording: return ("video.fill", .systemRed)
@@ -611,14 +741,14 @@ final class AppController: NSObject, NSApplicationDelegate {
 
         switch stage {
         case .downloadingModel(let f):
-            localModelStatus = "Downloading model… \(Int(f * 100))%"
+            localModelStatus = "downloading… \(Int(f * 100))%"
             if !recording {
                 stopSpinner()
                 button.contentTintColor = nil
                 button.image = ProgressIcon.ring(fraction: f, color: .controlAccentColor)
             }
         case .loadingModel:
-            localModelStatus = "Compiling model for the Neural Engine…"
+            localModelStatus = "compiling for the Neural Engine…"
             if !recording { startSpinner() }
         case .transcribing:
             break
@@ -626,12 +756,13 @@ final class AppController: NSObject, NSApplicationDelegate {
             localModelStatus = nil
             if case .idle = phase { setIcon(.ready) }
         case .failed(let message):
-            localModelStatus = "Model download failed: \(message.prefix(60))"
+            localModelStatus = "download failed: \(message.prefix(60))"
             if case .idle = phase {
                 playSound("Basso")
                 flashIcon(.failed)
             }
         }
+        settingsWindow.refreshIfVisible()
     }
 
     private func startSpinner() {

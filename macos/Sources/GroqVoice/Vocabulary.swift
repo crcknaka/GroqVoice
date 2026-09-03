@@ -51,7 +51,12 @@ final class Vocabulary {
         for entry in entries {
             for alias in entry.aliases + [entry.term] {
                 guard !alias.isEmpty else { continue }
-                let pattern = "(?<![\\p{L}\\p{N}])" + NSRegularExpression.escapedPattern(for: alias) + "(?![\\p{L}\\p{N}])"
+                // Russian inflects borrowed names ("в телеграмме", "на гитхабе"), so a
+                // Cyrillic alias of five letters or more also matches with up to three
+                // trailing letters. Short aliases stay exact to avoid false hits.
+                let isCyrillic = alias.unicodeScalars.contains { (0x0400...0x04FF).contains($0.value) }
+                let suffix = (isCyrillic && alias.count >= 5) ? "[\\p{Cyrillic}]{0,3}" : ""
+                let pattern = "(?<![\\p{L}\\p{N}])" + NSRegularExpression.escapedPattern(for: alias) + suffix + "(?![\\p{L}\\p{N}])"
                 guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
                 let range = NSRange(result.startIndex..., in: result)
                 let matches = re.matches(in: result, range: range)

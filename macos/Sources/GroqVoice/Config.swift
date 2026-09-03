@@ -6,6 +6,12 @@ struct Config: Codable {
     /// the stronger one is retried automatically once its cooldown expires.
     var transcriptionModels = ["whisper-large-v3", "whisper-large-v3-turbo"]
     var chatModels = ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "llama-3.1-8b-instant"]
+    /// Where chat completions go (task mode, clean-up, translation). Any
+    /// OpenAI-compatible server works: Groq (default), Ollama on this Mac
+    /// (http://localhost:11434/v1), LM Studio, OpenAI, OpenRouter, …
+    var chatBaseURL = Config.groqBaseURL
+    /// Key for `chatBaseURL`; empty = reuse `groqApiKey` (Ollama needs none).
+    var chatApiKey = ""
     /// ISO code ("ru", "en", "lv") or "" for auto-detect. For the on-device
     /// engine a fixed language only filters tokens by script, so leave it on
     /// auto for mixed Russian/English speech.
@@ -42,6 +48,10 @@ struct Config: Codable {
 
     /// Push-to-talk key: fn | rightCommand | rightOption | rightControl | leftControl.
     var hotkey = "fn"
+    /// Second push-to-talk key: what you say is translated into
+    /// `translateLanguage` before pasting. "" = off. Needs an LLM backend.
+    var translateHotkey = ""
+    var translateLanguage = "en"
     /// CoreAudio device UID; "" = system default input.
     var inputDeviceUID = ""
     /// Run the transcript through the LLM to fix punctuation and drop filler
@@ -51,6 +61,20 @@ struct Config: Codable {
     var pasteMode = "paste"
     var restoreClipboard = true
     var historySize = 50
+
+    static let groqBaseURL = "https://api.groq.com/openai/v1"
+
+    var usesGroqForChat: Bool { chatBaseURL.trimmingCharacters(in: .whitespaces).isEmpty || chatBaseURL == Config.groqBaseURL }
+    var effectiveChatApiKey: String { chatApiKey.isEmpty ? groqApiKey : chatApiKey }
+    var chatHost: String { URL(string: chatBaseURL)?.host ?? "api.groq.com" }
+    var chatPort: UInt16 {
+        let url = URL(string: chatBaseURL)
+        if let port = url?.port { return UInt16(port) }
+        return url?.scheme?.lowercased() == "http" ? 80 : 443
+    }
+    /// True when some chat backend is configured: a Groq key, or a custom
+    /// endpoint (which may need no key at all).
+    var llmConfigured: Bool { !usesGroqForChat || !groqApiKey.isEmpty }
 
     static var supportDir: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -62,17 +86,34 @@ struct Config: Codable {
     static var fileURL: URL { supportDir.appendingPathComponent("config.json") }
 
     var hotkeyKey: HotkeyKey { HotkeyKey(rawValue: hotkey) ?? .fn }
+    /// nil when off or when it collides with the main key.
+    var translateHotkeyKey: HotkeyKey? {
+        guard let key = HotkeyKey(rawValue: translateHotkey), key != hotkeyKey else { return nil }
+        return key
+    }
+    var translateLanguageName: String {
+        Config.translateLanguages.first { $0.code == translateLanguage }?.name ?? translateLanguage
+    }
+
+    static let translateLanguages: [(code: String, name: String)] = [
+        ("en", "English"), ("lv", "Latvian"), ("ru", "Russian"), ("uk", "Ukrainian"),
+        ("de", "German"), ("es", "Spanish"), ("fr", "French"), ("it", "Italian"), ("pl", "Polish"),
+    ]
+    static let recognitionLanguages: [(code: String, name: String)] = [
+        ("", "Auto-detect"), ("ru", "Русский"), ("en", "English"), ("lv", "Latviešu"), ("uk", "Українська"),
+        ("de", "Deutsch"), ("es", "Español"), ("fr", "Français"), ("it", "Italiano"), ("pl", "Polski"),
+    ]
     var pasteModeValue: PasteMode { PasteMode(rawValue: pasteMode) ?? .paste }
     var usesLocalEngine: Bool { sttEngine != "groq" }
 
     enum CodingKeys: String, CodingKey {
-        case groqApiKey, transcriptionModels, chatModels, language
+        case groqApiKey, transcriptionModels, chatModels, chatBaseURL, chatApiKey, language
         case taskKeywords, taskKeywordMaxWordPosition
         case minRecordingSeconds, silencePeakPercent
         case saveLastWav, playFeedbackSounds, taskSystemPrompt
         case pttHoldMs, doubleTapWindowMs, releaseTailMs, autostart
         case sttEngine, sttFallback, localUnloadAfterMinutes, vocabularyBoosting
-        case hotkey, inputDeviceUID, cleanupTranscript
+        case hotkey, translateHotkey, translateLanguage, inputDeviceUID, cleanupTranscript
         case pasteMode, restoreClipboard, historySize
         // Legacy keys, migrated on load.
         case transcriptionModel, chatModel, localMode
@@ -100,6 +141,8 @@ struct Config: Codable {
             chatModels = [legacy] + d.chatModels.filter { $0 != legacy }
         }
 
+        chatBaseURL = get(.chatBaseURL, d.chatBaseURL)
+        chatApiKey = get(.chatApiKey, d.chatApiKey)
         language = get(.language, d.language)
         taskKeywords = get(.taskKeywords, d.taskKeywords)
         taskKeywordMaxWordPosition = get(.taskKeywordMaxWordPosition, d.taskKeywordMaxWordPosition)
@@ -124,6 +167,8 @@ struct Config: Codable {
         vocabularyBoosting = get(.vocabularyBoosting, d.vocabularyBoosting)
 
         hotkey = get(.hotkey, d.hotkey)
+        translateHotkey = get(.translateHotkey, d.translateHotkey)
+        translateLanguage = get(.translateLanguage, d.translateLanguage)
         inputDeviceUID = get(.inputDeviceUID, d.inputDeviceUID)
         cleanupTranscript = get(.cleanupTranscript, d.cleanupTranscript)
         pasteMode = get(.pasteMode, d.pasteMode)
@@ -136,6 +181,8 @@ struct Config: Codable {
         try c.encode(groqApiKey, forKey: .groqApiKey)
         try c.encode(transcriptionModels, forKey: .transcriptionModels)
         try c.encode(chatModels, forKey: .chatModels)
+        try c.encode(chatBaseURL, forKey: .chatBaseURL)
+        try c.encode(chatApiKey, forKey: .chatApiKey)
         try c.encode(language, forKey: .language)
         try c.encode(taskKeywords, forKey: .taskKeywords)
         try c.encode(taskKeywordMaxWordPosition, forKey: .taskKeywordMaxWordPosition)
@@ -153,6 +200,8 @@ struct Config: Codable {
         try c.encode(localUnloadAfterMinutes, forKey: .localUnloadAfterMinutes)
         try c.encode(vocabularyBoosting, forKey: .vocabularyBoosting)
         try c.encode(hotkey, forKey: .hotkey)
+        try c.encode(translateHotkey, forKey: .translateHotkey)
+        try c.encode(translateLanguage, forKey: .translateLanguage)
         try c.encode(inputDeviceUID, forKey: .inputDeviceUID)
         try c.encode(cleanupTranscript, forKey: .cleanupTranscript)
         try c.encode(pasteMode, forKey: .pasteMode)

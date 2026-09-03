@@ -41,7 +41,7 @@ enum DefaultVocabulary {
     README: ридми
 
     # Git and builds
-    GitHub: гитхаб, гит хаб, гитхап
+    GitHub: гитхаб, гит хаб, гитхап, гитхэп
     GitLab: гитлаб, гит лаб
     git: гит
     push: пуш
@@ -66,10 +66,10 @@ enum DefaultVocabulary {
     Redis: редис
 
     # Platforms and services
-    Telegram: телеграм, телеграмм
+    Telegram: телеграм, телеграмм, телега
     WhatsApp: вотсап, воцап, ватсап
     Figma: фигма
-    Slack: слак
+    Slack: слак, слаг, слэк
     Notion: ноушен, ноушн
     Google: гугл
     Gmail: гмейл, джимейл
@@ -80,7 +80,7 @@ enum DefaultVocabulary {
     Stripe: страйп
     PayPal: пейпал, пэйпал
     Claude: клод
-    ChatGPT: чат джипити, чатгпт, чат гпт
+    ChatGPT: чат джипити, чаджипити, чатгпт, чат гпт, чат джи пи ти
     OpenAI: опенэйай, опен эйай
 
     # Devices and OS
@@ -90,7 +90,7 @@ enum DefaultVocabulary {
     Android: андроид
     Home Assistant: хоум ассистент, хом ассистент, хоум асистент
     Xiaomi: сяоми, ксиаоми, шаоми
-    Wi-Fi: вайфай, вай фай
+    Wi-Fi: вайфай, вай фай, вай-фай, вифи
     Bluetooth: блютус, блютуз
     """
 }
