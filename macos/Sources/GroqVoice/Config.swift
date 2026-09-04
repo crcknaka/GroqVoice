@@ -1,5 +1,26 @@
 import Foundation
 
+/// What an extra push-to-talk key does with what you say — or, when text was
+/// selected as the key went down, with that text.
+struct KeyAction: Codable, Equatable {
+    var key: String          // HotkeyKey raw value
+    var kind: String         // "translate" | "prompt"
+    var language = "en"      // translate: target language code
+    var prompt = ""          // prompt: the instruction applied to the text
+
+    var hotkeyKey: HotkeyKey? { HotkeyKey(rawValue: key) }
+    var isTranslate: Bool { kind == "translate" }
+    var languageName: String { Config.translateLanguages.first { $0.code == language }?.name ?? language }
+
+    /// Short description for menus and logs.
+    var summary: String {
+        if isTranslate { return "translate into \(languageName)" }
+        let p = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if p.isEmpty { return "custom prompt (not set)" }
+        return p.count > 48 ? String(p.prefix(45)) + "…" : p
+    }
+}
+
 struct Config: Codable {
     var groqApiKey = ""
     /// Priority order: strongest first. On a rate limit the next model is used;
@@ -59,10 +80,9 @@ struct Config: Codable {
 
     /// Push-to-talk key: fn | rightCommand | rightOption | rightControl | leftControl.
     var hotkey = "fn"
-    /// Second push-to-talk key: what you say is translated into
-    /// `translateLanguage` before pasting. "" = off. Needs an LLM backend.
-    var translateHotkey = ""
-    var translateLanguage = "en"
+    /// Extra push-to-talk keys, each with its own action (translate into a
+    /// language, or a custom prompt). Needs an LLM backend.
+    var keyActions: [KeyAction] = []
     /// CoreAudio device UID; "" = system default input.
     var inputDeviceUID = ""
     /// Run the transcript through the LLM to fix punctuation and drop filler
@@ -109,18 +129,29 @@ struct Config: Codable {
     static var fileURL: URL { supportDir.appendingPathComponent("config.json") }
 
     var hotkeyKey: HotkeyKey { HotkeyKey(rawValue: hotkey) ?? .fn }
-    /// nil when off or when it collides with the main key.
-    var translateHotkeyKey: HotkeyKey? {
-        guard let key = HotkeyKey(rawValue: translateHotkey), key != hotkeyKey else { return nil }
-        return key
+
+    /// The action bound to `key`, unless it is the main dictation key.
+    func action(for key: HotkeyKey) -> KeyAction? {
+        guard key != hotkeyKey else { return nil }
+        return keyActions.first { $0.key == key.rawValue }
     }
-    var translateLanguageName: String {
-        Config.translateLanguages.first { $0.code == translateLanguage }?.name ?? translateLanguage
+
+    /// Actions with a valid key that isn't the main one.
+    var activeKeyActions: [KeyAction] {
+        keyActions.filter { $0.hotkeyKey != nil && $0.hotkeyKey != hotkeyKey }
+    }
+
+    /// Replaces (or with nil removes) the action for a key.
+    mutating func setAction(_ action: KeyAction?, for key: HotkeyKey) {
+        keyActions.removeAll { $0.key == key.rawValue }
+        if var action { action.key = key.rawValue; keyActions.append(action) }
     }
 
     static let translateLanguages: [(code: String, name: String)] = [
         ("en", "English"), ("lv", "Latvian"), ("ru", "Russian"), ("uk", "Ukrainian"),
         ("de", "German"), ("es", "Spanish"), ("fr", "French"), ("it", "Italian"), ("pl", "Polish"),
+        ("et", "Estonian"), ("lt", "Lithuanian"), ("pt", "Portuguese"), ("nl", "Dutch"),
+        ("sv", "Swedish"), ("tr", "Turkish"), ("zh", "Chinese"), ("ja", "Japanese"),
     ]
     static let recognitionLanguages: [(code: String, name: String)] = [
         ("", "Auto-detect"), ("ru", "Русский"), ("en", "English"), ("lv", "Latviešu"), ("uk", "Українська"),
@@ -136,10 +167,10 @@ struct Config: Codable {
         case saveLastWav, playFeedbackSounds, taskSystemPrompt
         case pttHoldMs, doubleTapWindowMs, releaseTailMs, autostart
         case sttEngine, sttFallback, localUnloadAfterMinutes, vocabularyBoosting
-        case hotkey, translateHotkey, translateLanguage, inputDeviceUID, cleanupTranscript
+        case hotkey, keyActions, inputDeviceUID, cleanupTranscript
         case pasteMode, restoreClipboard, historySize, smartSpacing, spokenFormatting, preferBuiltInMic, editSelection
         // Legacy keys, migrated on load.
-        case transcriptionModel, chatModel, localMode
+        case transcriptionModel, chatModel, localMode, translateHotkey, translateLanguage
     }
 
     init() {}
@@ -190,8 +221,12 @@ struct Config: Codable {
         vocabularyBoosting = get(.vocabularyBoosting, d.vocabularyBoosting)
 
         hotkey = get(.hotkey, d.hotkey)
-        translateHotkey = get(.translateHotkey, d.translateHotkey)
-        translateLanguage = get(.translateLanguage, d.translateLanguage)
+        keyActions = get(.keyActions, d.keyActions)
+        if keyActions.isEmpty, let legacyKey = try c.decodeIfPresent(String.self, forKey: .translateHotkey), !legacyKey.isEmpty {
+            // The single "translate key" became one of several key actions.
+            keyActions = [KeyAction(key: legacyKey, kind: "translate",
+                                    language: get(.translateLanguage, "en"))]
+        }
         inputDeviceUID = get(.inputDeviceUID, d.inputDeviceUID)
         cleanupTranscript = get(.cleanupTranscript, d.cleanupTranscript)
         pasteMode = get(.pasteMode, d.pasteMode)
@@ -227,8 +262,7 @@ struct Config: Codable {
         try c.encode(localUnloadAfterMinutes, forKey: .localUnloadAfterMinutes)
         try c.encode(vocabularyBoosting, forKey: .vocabularyBoosting)
         try c.encode(hotkey, forKey: .hotkey)
-        try c.encode(translateHotkey, forKey: .translateHotkey)
-        try c.encode(translateLanguage, forKey: .translateLanguage)
+        try c.encode(keyActions, forKey: .keyActions)
         try c.encode(inputDeviceUID, forKey: .inputDeviceUID)
         try c.encode(cleanupTranscript, forKey: .cleanupTranscript)
         try c.encode(pasteMode, forKey: .pasteMode)

@@ -11,8 +11,8 @@ extension AppController: NSMenuDelegate {
 
         if hotkeyStatus == .active {
             menu.addItem(status("Hold \(config.hotkeyKey.title) to talk · double-tap to lock"))
-            if let translate = config.translateHotkeyKey {
-                menu.addItem(status("Hold \(translate.title) to translate into \(config.translateLanguageName)"))
+            for action in config.activeKeyActions {
+                menu.addItem(status("Hold \(action.hotkeyKey?.title ?? action.key): \(action.summary)"))
             }
         } else {
             menu.addItem(status("Hotkey inactive — permission missing"))
@@ -67,6 +67,7 @@ extension AppController: NSMenuDelegate {
                 switch entry.kind {
                 case "task": row.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
                 case "translate": row.image = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)
+                case "prompt": row.image = NSImage(systemSymbolName: "wand.and.stars", accessibilityDescription: nil)
                 case "edit": row.image = NSImage(systemSymbolName: "pencil", accessibilityDescription: nil)
                 case "snippet": row.image = NSImage(systemSymbolName: "text.badge.plus", accessibilityDescription: nil)
                 default: break
@@ -104,9 +105,9 @@ extension AppController: NSMenuDelegate {
             let row = item(key.title, #selector(menuSetHotkey(_:)))
             row.representedObject = key.rawValue
             row.state = config.hotkeyKey == key ? .on : .off
-            if key == config.translateHotkeyKey {
+            if let action = config.action(for: key) {
                 row.isEnabled = false
-                row.title = "\(key.title) — translate key"
+                row.title = "\(key.title) — \(action.summary)"
             }
             sub.addItem(row)
         }

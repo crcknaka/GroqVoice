@@ -28,13 +28,25 @@ import Testing
         #expect(Config().chatModels.first == "qwen/qwen3.8-27b")
     }
 
-    @Test func translateKeyCannotCollideWithMainKey() {
+    @Test func keyActionsIgnoreTheMainKey() {
         var cfg = Config()
         cfg.hotkey = "rightCommand"
-        cfg.translateHotkey = "rightCommand"
-        #expect(cfg.translateHotkeyKey == nil)
-        cfg.translateHotkey = "rightOption"
-        #expect(cfg.translateHotkeyKey == .rightOption)
+        cfg.setAction(KeyAction(key: "rightCommand", kind: "translate", language: "lv"), for: .rightCommand)
+        #expect(cfg.action(for: .rightCommand) == nil)
+        #expect(cfg.activeKeyActions.isEmpty)
+        cfg.setAction(KeyAction(key: "rightOption", kind: "prompt", prompt: "Сделай формально"), for: .rightOption)
+        #expect(cfg.action(for: .rightOption)?.summary == "Сделай формально")
+        cfg.setAction(nil, for: .rightOption)
+        #expect(cfg.action(for: .rightOption) == nil)
+    }
+
+    @Test func migratesTheOldTranslateKey() throws {
+        let json = """
+        {"translateHotkey":"leftControl","translateLanguage":"lv"}
+        """
+        let cfg = try JSONDecoder().decode(Config.self, from: Data(json.utf8))
+        #expect(cfg.keyActions == [KeyAction(key: "leftControl", kind: "translate", language: "lv")])
+        #expect(cfg.action(for: .leftControl)?.summary == "translate into Latvian")
     }
 
     @Test func chatEndpointHelpers() {

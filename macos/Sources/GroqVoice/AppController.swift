@@ -37,7 +37,7 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     enum IconState: Equatable {
         case inactive       // hotkey not running (permission missing)
-        case ready, recording, translating, editing, locked, processing, screenRecording
+        case ready, recording, translating, custom, editing, locked, processing, screenRecording
         case failed         // brief flash after an error
         case copied         // brief flash after copying from Recent
     }
@@ -48,7 +48,10 @@ final class AppController: NSObject, NSApplicationDelegate {
         case needsInputMonitoring   // trusted, but the listen-only tap still failed
     }
 
-    enum TakeKind { case dictate, translate }
+    enum TakeKind: Equatable {
+        case dictate
+        case action(KeyAction)
+    }
 
     var statusItem: NSStatusItem!
     var config = Config.load()
@@ -92,17 +95,18 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var settingsWindowLoaded = false
     private var historyWindowLoaded = false
 
-    /// The push-to-talk key plus the translate key, when one is set.
+    /// The push-to-talk key plus every key that has an action.
     var monitoredKeys: Set<HotkeyKey> {
         var keys: Set<HotkeyKey> = [config.hotkeyKey]
-        if let translate = config.translateHotkeyKey { keys.insert(translate) }
+        for action in config.activeKeyActions { if let key = action.hotkeyKey { keys.insert(key) } }
         return keys
     }
 
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        Log.write("=== GroqVoice for macOS started (engine: \(config.sttEngine), hotkey: \(config.hotkey), translate: \(config.translateHotkey.isEmpty ? "off" : config.translateHotkey)) ===")
+        let actions = config.activeKeyActions.map { "\($0.key) = \($0.summary)" }.joined(separator: "; ")
+        Log.write("=== GroqVoice for macOS started (engine: \(config.sttEngine), hotkey: \(config.hotkey), keys: \(actions.isEmpty ? "none" : actions)) ===")
         Log.write("Apple Intelligence: \(LocalLLM.statusDescription)")
         NSApp.mainMenu = MainMenu.build(app: self)
         setupStatusItem()
@@ -311,7 +315,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             scheduleFinish()
         case .idle:
             activeKey = key
-            takeKind = key == config.translateHotkeyKey ? .translate : .dictate
+            takeKind = config.action(for: key).map { .action($0) } ?? .dictate
             keyDownAt = Date()
             chordCancelled = false
             startRecording(locked: false)
@@ -337,6 +341,12 @@ final class AppController: NSObject, NSApplicationDelegate {
 
         let heldMs = Date().timeIntervalSince(t0) * 1000
         if heldMs >= config.pttHoldMs {
+            scheduleFinish()
+            return
+        }
+        // A tap on an action key with text selected applies the action to the
+        // selection — no need to say anything.
+        if case .action = takeKind, pendingSelection != nil {
             scheduleFinish()
             return
         }
@@ -388,16 +398,26 @@ final class AppController: NSObject, NSApplicationDelegate {
         do {
             try recorder.start(deviceUID: config.inputDeviceUID)
             phase = .recording(locked: locked)
-            // A selection at key-down turns the take into an edit of that text.
+            // A selection at key-down becomes the target: dictation edits it,
+            // an action key applies its action to it.
             pendingSelection = nil
-            if takeKind == .dictate, config.editSelection, config.llmConfigured || LocalLLM.isAvailable,
+            let wantsSelection = takeKind == .dictate ? config.editSelection : true
+            if wantsSelection, config.llmConfigured || LocalLLM.isAvailable,
                let selected = FocusedText.selectedText() {
                 pendingSelection = selected
             }
-            let icon: IconState = takeKind == .translate ? .translating : (pendingSelection != nil ? .editing : .recording)
+            let icon: IconState
+            let label: String
+            switch takeKind {
+            case .action(let action):
+                icon = action.isTranslate ? .translating : .custom
+                label = action.summary + (pendingSelection != nil ? " (selection, \(pendingSelection!.count) chars)" : "")
+            case .dictate:
+                icon = pendingSelection != nil ? .editing : .recording
+                label = pendingSelection != nil ? "edit selection, \(pendingSelection!.count) chars" : "dictate"
+            }
             setIcon(icon)
             playSound("Pop")
-            let label = takeKind == .translate ? "translate" : (pendingSelection != nil ? "edit selection, \(pendingSelection!.count) chars" : "dictate")
             Log.write("recording started (\(label))")
         } catch {
             phase = .idle
@@ -428,22 +448,26 @@ final class AppController: NSObject, NSApplicationDelegate {
         playSound("Tink")
         Log.write(String(format: "recording stopped: %.2fs, peak=%.2f%%", take.duration, take.peakPercent))
 
-        if take.duration < config.minRecordingSeconds {
-            discardRecording(reason: "too short (< \(config.minRecordingSeconds)s)")
+        let kind = takeKind
+        let selection = pendingSelection
+        pendingSelection = nil
+        // An action key with a selection needs no speech at all; anything
+        // else that is too short or silent was an accidental press.
+        var actionOnSelectionOnly = false
+        if case .action = kind, selection != nil { actionOnSelectionOnly = true }
+        let tooShort = take.duration < config.minRecordingSeconds
+        let silent = take.peakPercent < config.silencePeakPercent
+        if (tooShort || silent) && !actionOnSelectionOnly {
+            discardRecording(reason: tooShort ? "too short (< \(config.minRecordingSeconds)s)"
+                                             : "silence (peak < \(config.silencePeakPercent)%)")
             return
         }
-        if take.peakPercent < config.silencePeakPercent {
-            discardRecording(reason: "silence (peak < \(config.silencePeakPercent)%)")
-            return
-        }
+        let skipSTT = (tooShort || silent) && actionOnSelectionOnly
 
         phase = .processing
         setIcon(.processing)
 
         let cfg = config
-        let kind = takeKind
-        let selection = pendingSelection
-        pendingSelection = nil
         let released = releasedAt ?? Date()
         let vocabPrompt = vocabulary.prompt()
         let sttProbe = CloudProbe(host: "api.groq.com")
@@ -453,17 +477,20 @@ final class AppController: NSObject, NSApplicationDelegate {
             guard let self else { return }
             do {
                 let sttStarted = Date()
-                var transcript = try await self.obtainTranscript(take: take, cfg: cfg, vocabPrompt: vocabPrompt, probe: sttProbe)
+                var transcript = ""
+                if !skipSTT {
+                    transcript = try await self.obtainTranscript(take: take, cfg: cfg, vocabPrompt: vocabPrompt, probe: sttProbe)
+                    Log.write("STT result: \"\(transcript)\"")
+                    let aliased = self.vocabulary.applyAliases(to: transcript)
+                    if !aliased.changes.isEmpty {
+                        transcript = aliased.text
+                        Log.write("vocabulary aliases: \(aliased.changes.joined(separator: ", "))")
+                    }
+                    guard !transcript.isEmpty || selection != nil else {
+                        throw AppError("Nothing recognized")
+                    }
+                }
                 let sttSeconds = Date().timeIntervalSince(sttStarted)
-                Log.write("STT result: \"\(transcript)\"")
-                let aliased = self.vocabulary.applyAliases(to: transcript)
-                if !aliased.changes.isEmpty {
-                    transcript = aliased.text
-                    Log.write("vocabulary aliases: \(aliased.changes.joined(separator: ", "))")
-                }
-                guard !transcript.isEmpty else {
-                    throw AppError("Nothing recognized")
-                }
 
                 var output = transcript
                 var historyKind = "dictation"
@@ -486,16 +513,32 @@ final class AppController: NSObject, NSApplicationDelegate {
                     } else {
                         Log.write("edit selection: no LLM answer — dictation replaces the selection")
                     }
-                } else if kind == .translate {
-                    historyKind = "translate"
-                    let system = TaskRouter.translateSystemPrompt(to: cfg.translateLanguageName)
-                    guard let translated = await self.obtainChatAnswer(query: transcript, system: system, cfg: cfg,
-                                                                       probe: chatProbe, temperature: 0),
-                          !translated.isEmpty else {
-                        throw AppError("No language model for translation — configure one in Settings → Groq & LLM")
+                } else if case .action(let action) = kind {
+                    historyKind = action.isTranslate ? "translate" : "prompt"
+                    if !action.isTranslate, action.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        throw AppError("The custom prompt for \(action.hotkeyKey?.title ?? action.key) is empty — set it in Settings")
                     }
-                    output = translated
-                    Log.write("translated → \(cfg.translateLanguage): \"\(output.prefix(200))\"")
+                    // With a selection the action targets it and speech is a side note;
+                    // otherwise the speech itself is the text to act on.
+                    let target = selection ?? transcript
+                    guard !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        throw AppError("Nothing recognized")
+                    }
+                    var system = action.isTranslate
+                        ? TaskRouter.translateSystemPrompt(to: action.languageName)
+                        : TaskRouter.customActionSystemPrompt(action.prompt)
+                    var user = target
+                    if selection != nil, !transcript.isEmpty {
+                        system += TaskRouter.spokenNoteRule
+                        user = TaskRouter.actionUserMessage(target: target, spoken: transcript)
+                    }
+                    guard let result = await self.obtainChatAnswer(query: user, system: system, cfg: cfg,
+                                                                   probe: chatProbe, temperature: 0),
+                          !result.isEmpty else {
+                        throw AppError("No language model for this key — configure one in Settings → Groq & LLM")
+                    }
+                    output = result
+                    Log.write("\(action.summary) → \"\(output.prefix(200))\"")
                 } else if let query = TaskRouter.taskQuery(from: transcript,
                                                            keywords: cfg.taskKeywords,
                                                            maxPosition: cfg.taskKeywordMaxWordPosition) {
@@ -752,7 +795,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         var step = 0
         func next() {
             switch step {
-            case 0..<3:
+            case 0..<4:
                 settingsWindow.selectTab(step)
                 settingsWindow.window?.makeKeyAndOrderFront(nil)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
@@ -760,18 +803,18 @@ final class AppController: NSObject, NSApplicationDelegate {
                     step += 1
                     next()
                 }
-            case 3:
+            case 4:
                 historyWindow.window?.makeKeyAndOrderFront(nil)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                     capture(self.historyWindow.window, "history")
                     step += 1
                     next()
                 }
-            case 4, 5:
-                dictionaryWindow.selectTab(step - 4)
+            case 5, 6:
+                dictionaryWindow.selectTab(step - 5)
                 dictionaryWindow.window?.makeKeyAndOrderFront(nil)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                    capture(self.dictionaryWindow.window, "dictionary-\(step - 4)")
+                    capture(self.dictionaryWindow.window, "dictionary-\(step - 5)")
                     step += 1
                     next()
                 }
@@ -806,6 +849,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             case .ready: return ("mic", nil)
             case .recording: return ("mic.fill", .systemRed)
             case .translating: return ("mic.fill", .systemBlue)
+            case .custom: return ("mic.fill", .systemIndigo)
             case .editing: return ("mic.fill", .systemPurple)
             case .locked: return ("mic.fill", .systemOrange)
             case .processing: return ("hourglass", .systemYellow)

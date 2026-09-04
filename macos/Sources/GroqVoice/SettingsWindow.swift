@@ -59,8 +59,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     // General
     private let hotkeyPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let translateKeyPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let translateLangPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    // One row per possible extra key: what it does, into which language, or with which prompt.
+    private struct KeyRow {
+        let key: HotkeyKey
+        let action = NSPopUpButton(frame: .zero, pullsDown: false)
+        let language = NSPopUpButton(frame: .zero, pullsDown: false)
+        let prompt = NSTextField()
+    }
+    private let keyRows = HotkeyKey.allCases.map { KeyRow(key: $0) }
+    private var keysGrid: NSGridView!
     private let micPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let languagePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let pastePopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -158,6 +165,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         addTab("General", buildGeneral())
         addTab("Recognition", buildRecognition())
         addTab("Groq & LLM", buildLLM())
+        addTab("Advanced", buildAdvanced())
     }
 
     private func addTab(_ title: String, _ stack: NSStackView) {
@@ -178,20 +186,38 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     private func buildGeneral() -> NSStackView {
         hotkeyPopup.addItems(withTitles: HotkeyKey.allCases.map(\.title))
         bind(hotkeyPopup) { [unowned self] _ in
-            self.app.config.hotkey = HotkeyKey.allCases[self.hotkeyPopup.indexOfSelectedItem].rawValue
-            if self.app.config.translateHotkey == self.app.config.hotkey { self.app.config.translateHotkey = "" }
+            let key = HotkeyKey.allCases[self.hotkeyPopup.indexOfSelectedItem]
+            self.app.config.hotkey = key.rawValue
+            self.app.config.setAction(nil, for: key)  // the main key can't also carry an action
             self.commit()
         }
-        translateKeyPopup.addItems(withTitles: ["Off"] + HotkeyKey.allCases.map(\.title))
-        bind(translateKeyPopup) { [unowned self] _ in
-            let i = self.translateKeyPopup.indexOfSelectedItem
-            self.app.config.translateHotkey = i == 0 ? "" : HotkeyKey.allCases[i - 1].rawValue
-            self.commit()
-        }
-        translateLangPopup.addItems(withTitles: Config.translateLanguages.map(\.name))
-        bind(translateLangPopup) { [unowned self] _ in
-            self.app.config.translateLanguage = Config.translateLanguages[self.translateLangPopup.indexOfSelectedItem].code
-            self.commit()
+        for r in keyRows {
+            r.action.addItems(withTitles: ["Off", "Translate into…", "Custom prompt…"])
+            r.language.addItems(withTitles: Config.translateLanguages.map(\.name))
+            r.prompt.placeholderString = "e.g. Перепиши формально и вежливо"
+            bind(r.action) { [unowned self] _ in
+                switch r.action.indexOfSelectedItem {
+                case 1:
+                    let lang = Config.translateLanguages[max(0, r.language.indexOfSelectedItem)].code
+                    self.app.config.setAction(KeyAction(key: r.key.rawValue, kind: "translate", language: lang), for: r.key)
+                case 2:
+                    self.app.config.setAction(KeyAction(key: r.key.rawValue, kind: "prompt", prompt: r.prompt.stringValue), for: r.key)
+                default:
+                    self.app.config.setAction(nil, for: r.key)
+                }
+                self.commit()
+            }
+            bind(r.language) { [unowned self] _ in
+                guard var action = self.app.config.action(for: r.key), action.isTranslate else { return }
+                action.language = Config.translateLanguages[r.language.indexOfSelectedItem].code
+                self.app.config.setAction(action, for: r.key)
+                self.commit()
+            }
+            bindText(r.prompt, width: 250) { [unowned self] text in
+                guard var action = self.app.config.action(for: r.key), !action.isTranslate else { return }
+                action.prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.app.config.setAction(action, for: r.key)
+            }
         }
         bind(micPopup) { [unowned self] _ in
             self.app.config.inputDeviceUID = (self.micPopup.selectedItem?.representedObject as? String) ?? ""
@@ -226,16 +252,22 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         languageHint.textColor = .secondaryLabelColor
         languageHint.preferredMaxLayoutWidth = 420
 
-        let keysGrid = grid([
+        let mainGrid = grid([
             [label("Push-to-talk key:"), hotkeyPopup],
             [empty(), hint("Hold to record, release to paste. Double-tap locks the recording; the next tap stops it.")],
-            [label("Translate key:"), row(translateKeyPopup, label("into"), translateLangPopup)],
-            [empty(), hint("A second key: speak in any language, the translation is pasted. Needs a language model (Groq & LLM tab).")],
             [label("Microphone:"), micPopup],
             [empty(), builtInMicCheck],
             [label("Language:"), languagePopup],
             [empty(), languageHint],
         ])
+
+        keysGrid = grid(keyRows.map { r in [label(r.key.title + ":"), row(r.action, r.language, r.prompt)] })
+        let keysHint = hint("Hold a key and speak: the action is applied to what you said and the result is pasted. With text selected when you press it, the action is applied to the selection instead — a short tap is enough — and anything you say is treated as an extra instruction. Needs a language model (Groq & LLM tab).")
+        let keysStack = NSStackView(views: [keysGrid, keysHint])
+        keysStack.orientation = .vertical
+        keysStack.alignment = .leading
+        keysStack.spacing = 8
+
         let pasteGrid = grid([
             [label("Insert text by:"), pastePopup],
             [empty(), smartSpacingCheck],
@@ -243,8 +275,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             [empty(), restoreClipboardCheck],
             [empty(), soundsCheck],
             [empty(), loginCheck],
-            [empty(), saveWavCheck],
         ])
+        return column([mainGrid, box("Extra keys: translate or apply your own prompt", keysStack), box("Pasting", pasteGrid)])
+    }
+
+    private func buildAdvanced() -> NSStackView {
         let timingGrid = grid([
             [label("Hold threshold:"), row(holdField, unit("ms"), hint("shorter presses count as taps"))],
             [label("Double-tap window:"), row(doubleTapField, unit("ms"))],
@@ -252,6 +287,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             [label("Minimum take:"), row(minTakeField, unit("s"), hint("shorter takes are dropped as accidental"))],
             [label("Silence threshold:"), row(silenceField, unit("%"), hint("takes with a lower peak are dropped"))],
             [label("History size:"), row(historyField, unit("entries"))],
+            [empty(), saveWavCheck],
         ])
         let openLog = button("Open Log") { NSWorkspace.shared.open(Log.fileURL) }
         let openFolder = button("Open Data Folder") { NSWorkspace.shared.open(Config.supportDir) }
@@ -259,8 +295,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         let buttons = NSStackView(views: [openLog, openFolder, reset])
         buttons.orientation = .horizontal
         buttons.spacing = 8
-
-        return column([keysGrid, box("Pasting", pasteGrid), box("Timing", timingGrid), buttons])
+        return column([box("Timing and debugging", timingGrid), buttons])
     }
 
     private func buildRecognition() -> NSStackView {
@@ -399,12 +434,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         let c = app.config
 
         hotkeyPopup.selectItem(at: HotkeyKey.allCases.firstIndex(of: c.hotkeyKey) ?? 0)
-        translateKeyPopup.selectItem(at: c.translateHotkeyKey.flatMap { HotkeyKey.allCases.firstIndex(of: $0) }.map { $0 + 1 } ?? 0)
-        for (i, key) in HotkeyKey.allCases.enumerated() {
-            translateKeyPopup.item(at: i + 1)?.isEnabled = key != c.hotkeyKey
+        for (i, r) in keyRows.enumerated() {
+            keysGrid.row(at: i).isHidden = r.key == c.hotkeyKey
+            let action = c.action(for: r.key)
+            r.action.selectItem(at: action == nil ? 0 : (action!.isTranslate ? 1 : 2))
+            r.language.isHidden = !(action?.isTranslate ?? false)
+            r.language.selectItem(at: Config.translateLanguages.firstIndex { $0.code == action?.language } ?? 0)
+            r.prompt.isHidden = !(action.map { !$0.isTranslate } ?? false)
+            if let action, !action.isTranslate, r.prompt.currentEditor() == nil { r.prompt.stringValue = action.prompt }
         }
-        translateLangPopup.selectItem(at: Config.translateLanguages.firstIndex { $0.code == c.translateLanguage } ?? 0)
-        translateLangPopup.isEnabled = c.translateHotkeyKey != nil
 
         micPopup.removeAllItems()
         let defaultName = AudioDevices.defaultInputDeviceID().map(AudioDevices.name(of:))
