@@ -98,6 +98,44 @@ struct FocusedText {
 
     static func selectedText() -> String? { probeSelection().text }
 
+    /// Can the focused element take a paste?
+    enum PasteTarget: Equatable {
+        case editable      // a text field/area, or an element whose value is settable
+        case nonEditable   // a web page, PDF, file list, button… nowhere to type
+        case unknown       // an ambiguous role — assume it can, but keep the result safe
+
+        static let editableRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"]
+        static let nonEditableRoles: Set<String> = [
+            "AXWebArea", "AXStaticText", "AXImage", "AXOutline", "AXTable", "AXBrowser", "AXList", "AXRow",
+            "AXCell", "AXWindow", "AXButton", "AXLink", "AXMenuItem", "AXMenu", "AXToolbar", "AXRadioButton",
+            "AXCheckBox", "AXPopUpButton", "AXSlider", "AXSplitGroup", "AXTabGroup", "AXApplication", "AXDocument",
+        ]
+
+        static func classify(role: String?, valueSettable: Bool) -> PasteTarget {
+            guard let role else { return .nonEditable }
+            if editableRoles.contains(role) || valueSettable { return .editable }
+            if nonEditableRoles.contains(role) { return .nonEditable }
+            return .unknown
+        }
+    }
+
+    /// Looks at the focused element right before pasting.
+    static func pasteTarget() -> (target: PasteTarget, role: String) {
+        let system = AXUIElementCreateSystemWide()
+        var focusedRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
+              let focusedAny = focusedRef else {
+            return (.nonEditable, "no focused element")
+        }
+        let element = focusedAny as! AXUIElement
+        var roleRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
+        let role = (roleRef as? String) ?? "?"
+        var settable = DarwinBoolean(false)
+        AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable)
+        return (PasteTarget.classify(role: role, valueSettable: settable.boolValue), role)
+    }
+
     /// ⌘C into a scratch clipboard, read, restore. Returns nil when nothing
     /// arrived within 150 ms (no selection, or the app doesn't copy on ⌘C).
     private static func copySelectionViaCommandC() -> String? {

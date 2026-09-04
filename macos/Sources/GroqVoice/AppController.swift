@@ -578,8 +578,25 @@ final class AppController: NSObject, NSApplicationDelegate {
                         toInsert = context.adjust(finalText, knownTerms: terms)
                         if toInsert != finalText { Log.write("smart spacing: adjusted for the caret context") }
                     }
-                    Paster.deliver(toInsert, mode: cfg.pasteModeValue, restoreClipboard: cfg.restoreClipboard)
-                    Log.write(String(format: "take: key released → pasted in %.2fs (tail %.0f ms, stt %.2fs)",
+                    let (target, role) = FocusedText.pasteTarget()
+                    switch target {
+                    case .editable:
+                        Paster.deliver(toInsert, mode: cfg.pasteModeValue, restoreClipboard: cfg.restoreClipboard)
+                    case .unknown:
+                        // Probably a text view we can't read; paste, but keep the
+                        // result on the clipboard in case nothing took it.
+                        Paster.deliver(toInsert, mode: cfg.pasteModeValue, restoreClipboard: false)
+                        Log.write("paste target \(role) is ambiguous — result left on the clipboard as well")
+                    case .nonEditable:
+                        // A web page, PDF, file list…: nowhere to type. Hand the
+                        // result over via the clipboard instead of losing it.
+                        let pb = NSPasteboard.general
+                        pb.clearContents()
+                        pb.setString(finalText, forType: .string)
+                        self.flashIcon(.copied, for: 2.5)
+                        Log.write("nowhere to paste (focus: \(role)) — result copied to the clipboard")
+                    }
+                    Log.write(String(format: "take: key released → delivered in %.2fs (tail %.0f ms, stt %.2fs)",
                                      Date().timeIntervalSince(released), cfg.releaseTailMs, sttSeconds))
                     self.history.add(finalText, kind: finalKind)
                     self.finishProcessing(cfg: cfg)

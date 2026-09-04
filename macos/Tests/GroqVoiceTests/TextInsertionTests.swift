@@ -46,3 +46,20 @@ import Testing
         #expect(ctx.adjust("новое слово") == "новое слово ")
     }
 }
+
+@Suite struct PasteTargetTests {
+    @Test func textFieldsAndSettableValuesAreEditable() {
+        #expect(FocusedText.PasteTarget.classify(role: "AXTextArea", valueSettable: false) == .editable)
+        #expect(FocusedText.PasteTarget.classify(role: "AXGroup", valueSettable: true) == .editable)
+    }
+
+    @Test func pagesAndListsAreNot() {
+        #expect(FocusedText.PasteTarget.classify(role: "AXWebArea", valueSettable: false) == .nonEditable)
+        #expect(FocusedText.PasteTarget.classify(role: "AXOutline", valueSettable: false) == .nonEditable)
+        #expect(FocusedText.PasteTarget.classify(role: nil, valueSettable: false) == .nonEditable)
+    }
+
+    @Test func unknownRolesStayCautious() {
+        #expect(FocusedText.PasteTarget.classify(role: "AXGroup", valueSettable: false) == .unknown)
+    }
+}
