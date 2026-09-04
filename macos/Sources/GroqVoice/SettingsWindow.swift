@@ -190,12 +190,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             self.app.config.hotkey = key.rawValue
             self.app.config.setAction(nil, for: key)  // the main key can't also carry an action
             self.commit()
+            self.showCaveat(for: key)
         }
         for r in keyRows {
             r.action.addItems(withTitles: ["Off", "Translate into…", "Custom prompt…"])
             r.language.addItems(withTitles: Config.translateLanguages.map(\.name))
             r.prompt.placeholderString = "e.g. Перепиши формально и вежливо"
             bind(r.action) { [unowned self] _ in
+                let wasOff = self.app.config.action(for: r.key) == nil
                 switch r.action.indexOfSelectedItem {
                 case 1:
                     let lang = Config.translateLanguages[max(0, r.language.indexOfSelectedItem)].code
@@ -206,6 +208,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
                     self.app.config.setAction(nil, for: r.key)
                 }
                 self.commit()
+                if wasOff, r.action.indexOfSelectedItem != 0 { self.showCaveat(for: r.key) }
             }
             bind(r.language) { [unowned self] _ in
                 guard var action = self.app.config.action(for: r.key), action.isTranslate else { return }
@@ -545,6 +548,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         guard text != app.config.taskSystemPrompt else { return }
         app.config.taskSystemPrompt = text
         app.settingsChanged()
+    }
+
+    private func showCaveat(for key: HotkeyKey) {
+        guard let caveat = key.caveat else { return }
+        let alert = NSAlert()
+        alert.messageText = "About \(key.title)"
+        alert.informativeText = caveat
+        alert.runModal()
     }
 
     private func resetToDefaults() {

@@ -48,6 +48,7 @@ enum Paster {
         }
         down.flags = .maskCommand
         up.flags = .maskCommand
+        mark(down); mark(up)
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
 
@@ -55,21 +56,46 @@ enum Paster {
         DispatchQueue.main.asyncAfter(deadline: .now() + restoreDelay) {
             // If the user copied something else already, leave it alone.
             guard pb.changeCount == ourChange else { return }
-            pb.clearContents()
-            pb.writeObjects(snapshot.map { item in
-                let copy = NSPasteboardItem()
-                for (type, data) in item { copy.setData(data, forType: type) }
-                return copy
-            })
+            restore(snapshot, to: pb)
         }
     }
 
-    private static func snapshotPasteboard(_ pb: NSPasteboard) -> [[(NSPasteboard.PasteboardType, Data)]] {
+    typealias PasteboardSnapshot = [[(NSPasteboard.PasteboardType, Data)]]
+
+    static func snapshotPasteboard(_ pb: NSPasteboard) -> PasteboardSnapshot {
         (pb.pasteboardItems ?? []).map { item in
             item.types.compactMap { type in
                 item.data(forType: type).map { (type, $0) }
             }
         }.filter { !$0.isEmpty }
+    }
+
+    static func restore(_ snapshot: PasteboardSnapshot, to pb: NSPasteboard) {
+        pb.clearContents()
+        guard !snapshot.isEmpty else { return }
+        pb.writeObjects(snapshot.map { item in
+            let copy = NSPasteboardItem()
+            for (type, data) in item { copy.setData(data, forType: type) }
+            return copy
+        })
+    }
+
+    /// Synthesizes ⌘C in the focused app.
+    static func pressCommandC() {
+        let src = CGEventSource(stateID: .combinedSessionState)
+        let kVK_C: CGKeyCode = 8
+        guard let down = CGEvent(keyboardEventSource: src, virtualKey: kVK_C, keyDown: true),
+              let up = CGEvent(keyboardEventSource: src, virtualKey: kVK_C, keyDown: false) else { return }
+        down.flags = .maskCommand
+        up.flags = .maskCommand
+        mark(down); mark(up)
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
+    }
+
+    /// Tags an event as ours so the hotkey tap ignores it.
+    private static func mark(_ event: CGEvent) {
+        event.setIntegerValueField(.eventSourceUserData, value: HotkeyMonitor.syntheticMarker)
     }
 
     // MARK: - Type
@@ -86,6 +112,7 @@ enum Paster {
                       let up = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false) else { continue }
                 down.flags = []
                 up.flags = []
+                mark(down); mark(up)
                 down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
                 up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
                 down.post(tap: .cghidEventTap)
@@ -100,6 +127,7 @@ enum Paster {
               let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else { return }
         down.flags = []
         up.flags = []
+        mark(down); mark(up)
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
     }

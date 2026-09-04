@@ -45,19 +45,73 @@ struct FocusedText {
         return FocusedText(before: before, after: after, isEmpty: ns.length == 0)
     }
 
-    /// The text currently selected in the focused element, or nil when there
-    /// is none or the app doesn't expose it through Accessibility.
-    static func selectedText() -> String? {
+    /// What the focused app exposes about its selection, for the log.
+    struct SelectionProbe {
+        let app: String
+        let role: String
+        let text: String?
+        let source: String   // "accessibility", "⌘C", "none"
+
+        var description: String {
+            let n = text.map { "\($0.count) chars via \(source)" } ?? "none"
+            return "focus: \(app) / \(role), selection: \(n)"
+        }
+    }
+
+    /// The text currently selected in the focused app. Accessibility first;
+    /// when the app reports a non-empty selected range but no text (Electron
+    /// editors, terminals), a synthesized ⌘C fetches it and the clipboard is
+    /// put back right away.
+    static func probeSelection() -> SelectionProbe {
+        let app = NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
         let system = AXUIElementCreateSystemWide()
         var focusedRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
-              let focusedAny = focusedRef else { return nil }
+              let focusedAny = focusedRef else {
+            return SelectionProbe(app: app, role: "no focused element", text: nil, source: "none")
+        }
         let element = focusedAny as! AXUIElement
+        var roleRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
+        let role = (roleRef as? String) ?? "?"
+
         var selectedRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &selectedRef) == .success,
-              let selected = selectedRef as? String else { return nil }
-        let trimmed = selected.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : selected
+        if AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &selectedRef) == .success,
+           let selected = selectedRef as? String,
+           !selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return SelectionProbe(app: app, role: role, text: selected, source: "accessibility")
+        }
+
+        // A selected range with no readable text → ask the app to copy it.
+        var rangeRef: CFTypeRef?
+        var range = CFRange()
+        let hasRange = AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success
+            && rangeRef != nil && AXValueGetValue(rangeRef as! AXValue, .cfRange, &range) && range.length > 0
+        let editorLike = ["AXTextArea", "AXTextField", "AXWebArea", "AXGroup", "AXScrollArea"].contains(role)
+        if hasRange || (editorLike && selectedRef == nil) {
+            if let copied = copySelectionViaCommandC(), !copied.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return SelectionProbe(app: app, role: role, text: copied, source: "⌘C")
+            }
+        }
+        return SelectionProbe(app: app, role: role, text: nil, source: "none")
+    }
+
+    static func selectedText() -> String? { probeSelection().text }
+
+    /// ⌘C into a scratch clipboard, read, restore. Returns nil when nothing
+    /// arrived within 150 ms (no selection, or the app doesn't copy on ⌘C).
+    private static func copySelectionViaCommandC() -> String? {
+        let pb = NSPasteboard.general
+        let snapshot = Paster.snapshotPasteboard(pb)
+        let before = pb.changeCount
+        Paster.pressCommandC()
+        let deadline = Date().addingTimeInterval(0.15)
+        while pb.changeCount == before && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        defer { Paster.restore(snapshot, to: pb) }
+        guard pb.changeCount != before else { return nil }
+        return pb.string(forType: .string)
     }
 
     /// Adjusts dictated text for where it lands: a space when glued to a word

@@ -402,9 +402,10 @@ final class AppController: NSObject, NSApplicationDelegate {
             // an action key applies its action to it.
             pendingSelection = nil
             let wantsSelection = takeKind == .dictate ? config.editSelection : true
-            if wantsSelection, config.llmConfigured || LocalLLM.isAvailable,
-               let selected = FocusedText.selectedText() {
-                pendingSelection = selected
+            if wantsSelection, config.llmConfigured || LocalLLM.isAvailable {
+                let probe = FocusedText.probeSelection()
+                pendingSelection = probe.text
+                Log.write(probe.description)
             }
             let icon: IconState
             let label: String

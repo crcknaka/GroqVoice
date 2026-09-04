@@ -3,7 +3,7 @@ import Cocoa
 /// Keys that can serve as push-to-talk triggers. All are modifiers, so
 /// holding one never types anything and the rest of the keyboard keeps working.
 enum HotkeyKey: String, CaseIterable {
-    case fn, rightCommand, rightOption, rightControl, leftControl
+    case fn, rightCommand, rightOption, rightControl, leftControl, leftOption, leftCommand
 
     var title: String {
         switch self {
@@ -12,6 +12,8 @@ enum HotkeyKey: String, CaseIterable {
         case .rightOption: return "Right ⌥"
         case .rightControl: return "Right ⌃"
         case .leftControl: return "Left ⌃"
+        case .leftOption: return "Left ⌥"
+        case .leftCommand: return "Left ⌘"
         }
     }
 
@@ -22,25 +24,29 @@ enum HotkeyKey: String, CaseIterable {
         case .rightOption: return 61
         case .rightControl: return 62
         case .leftControl: return 59
+        case .leftOption: return 58
+        case .leftCommand: return 55
         }
     }
 
     var flag: CGEventFlags {
         switch self {
         case .fn: return .maskSecondaryFn
-        case .rightCommand: return .maskCommand
-        case .rightOption: return .maskAlternate
+        case .rightCommand, .leftCommand: return .maskCommand
+        case .rightOption, .leftOption: return .maskAlternate
         case .rightControl, .leftControl: return .maskControl
         }
     }
 
-    /// Extra setup the user has to do for this key to work as a plain hotkey.
+    /// Extra setup or trade-offs the user should know about for this key.
     var caveat: String? {
         switch self {
         case .fn:
             return "Set System Settings → Keyboard → “Press 🌐 key to” → “Do Nothing”, otherwise a double-tap opens the emoji picker or dictation."
         case .rightOption:
             return "On layouts that use Right ⌥ for accented letters (e.g. Latvian ā, ē) holding it will interfere with typing them."
+        case .leftCommand, .leftOption:
+            return "This key is part of most shortcuts (⌘C, ⌥←, ⌘-click…). Every shortcut briefly starts and cancels a take — harmless, but a key held while you talk to someone will dictate. A click while it is held cancels the take. Right-side keys are quieter."
         default:
             return nil
         }
@@ -62,6 +68,10 @@ final class HotkeyMonitor {
     var onEscape: (() -> Void)?        // Esc on its own (cancels a locked recording)
     var onScreenToggle: (() -> Void)?  // ⌃⌥⌘R — start/stop screen recording
 
+    /// Stamped on every event the app posts itself (⌘V, ⌘C, typed text) so the
+    /// tap doesn't mistake them for the user chording with a held hotkey.
+    static let syntheticMarker: Int64 = 0x47_56_4F_49_43_45  // "GVOICE"
+
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var down: Set<HotkeyKey> = []
@@ -73,7 +83,10 @@ final class HotkeyMonitor {
     func start() -> Bool {
         let mask: CGEventMask =
             (1 << CGEventType.flagsChanged.rawValue) |
-            (1 << CGEventType.keyDown.rawValue)
+            (1 << CGEventType.keyDown.rawValue) |
+            (1 << CGEventType.leftMouseDown.rawValue) |
+            (1 << CGEventType.rightMouseDown.rawValue) |
+            (1 << CGEventType.otherMouseDown.rawValue)
 
         let callback: CGEventTapCallBack = { _, type, event, refcon in
             let monitor = Unmanaged<HotkeyMonitor>.fromOpaque(refcon!).takeUnretainedValue()
@@ -122,8 +135,12 @@ final class HotkeyMonitor {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return
         }
+        if event.getIntegerValueField(.eventSourceUserData) == HotkeyMonitor.syntheticMarker { return }
 
         switch type {
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            // ⌘-click, ⌥-click and friends: the held key was a modifier, not a hotkey.
+            if !down.isEmpty { DispatchQueue.main.async { self.onChordKey?() } }
         case .flagsChanged:
             let keycode = event.getIntegerValueField(.keyboardEventKeycode)
             for key in keys {
