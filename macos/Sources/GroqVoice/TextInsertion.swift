@@ -13,11 +13,7 @@ struct FocusedText {
     var lastVisibleBefore: Character? { before.flatMap { $0.isWhitespace ? nil : $0 } }
 
     static func current() -> FocusedText? {
-        let system = AXUIElementCreateSystemWide()
-        var focusedRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
-              let focusedAny = focusedRef else { return nil }
-        let element = focusedAny as! AXUIElement
+        guard let element = focusedElement() else { return nil }
 
         var roleRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef) == .success,
@@ -58,38 +54,61 @@ struct FocusedText {
         }
     }
 
-    /// The text currently selected in the focused app. Accessibility first;
-    /// when the app reports a non-empty selected range but no text (Electron
-    /// editors, terminals), a synthesized ⌘C fetches it and the clipboard is
-    /// put back right away.
-    static func probeSelection() -> SelectionProbe {
-        let app = NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
-        let system = AXUIElementCreateSystemWide()
-        var focusedRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
-              let focusedAny = focusedRef else {
-            return SelectionProbe(app: app, role: "no focused element", text: nil, source: "none")
+    /// The element with keyboard focus: the system-wide attribute first, then
+    /// the frontmost app's own (Electron apps answer only the latter, if at all).
+    static func focusedElement() -> AXUIElement? {
+        var ref: CFTypeRef?
+        if AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &ref) == .success,
+           let r = ref {
+            return (r as! AXUIElement)
         }
-        let element = focusedAny as! AXUIElement
+        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        ref = nil
+        if AXUIElementCopyAttributeValue(AXUIElementCreateApplication(app.processIdentifier),
+                                         kAXFocusedUIElementAttribute as CFString, &ref) == .success, let r = ref {
+            return (r as! AXUIElement)
+        }
+        return nil
+    }
+
+    static func role(of element: AXUIElement) -> String {
         var roleRef: CFTypeRef?
         AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
-        let role = (roleRef as? String) ?? "?"
+        return (roleRef as? String) ?? "?"
+    }
+
+    /// The text currently selected in the frontmost app. Accessibility first;
+    /// where the app doesn't expose the selection at all (Word's document view,
+    /// VS Code, terminals, web pages) a synthesized ⌘C fetches it and the
+    /// clipboard is put back right away. Apps that do expose it but report it
+    /// empty (JetBrains, Xcode) are trusted — their ⌘C would copy a whole line.
+    static func probeSelection() -> SelectionProbe {
+        let app = NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
+        guard let element = focusedElement() else {
+            if let copied = copySelectionViaCommandC() {
+                return SelectionProbe(app: app, role: "no focused element", text: copied, source: "⌘C")
+            }
+            return SelectionProbe(app: app, role: "no focused element", text: nil, source: "none")
+        }
+        let role = role(of: element)
 
         var selectedRef: CFTypeRef?
-        if AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &selectedRef) == .success,
-           let selected = selectedRef as? String,
+        let status = AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &selectedRef)
+        if status == .success, let selected = selectedRef as? String,
            !selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return SelectionProbe(app: app, role: role, text: selected, source: "accessibility")
         }
+        if PasteTarget.nonEditableRoles.contains(role) && role != "AXWebArea" {
+            return SelectionProbe(app: app, role: role, text: nil, source: "none")  // lists, buttons: nothing to edit
+        }
 
-        // A selected range with no readable text → ask the app to copy it.
         var rangeRef: CFTypeRef?
         var range = CFRange()
         let hasRange = AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success
             && rangeRef != nil && AXValueGetValue(rangeRef as! AXValue, .cfRange, &range) && range.length > 0
-        let editorLike = ["AXTextArea", "AXTextField", "AXWebArea", "AXGroup", "AXScrollArea"].contains(role)
-        if hasRange || (editorLike && selectedRef == nil) {
-            if let copied = copySelectionViaCommandC(), !copied.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        let exposesSelection = status == .success || status == .noValue
+        if hasRange || !exposesSelection || role == "AXWebArea" {
+            if let copied = copySelectionViaCommandC() {
                 return SelectionProbe(app: app, role: role, text: copied, source: "⌘C")
             }
         }
@@ -105,14 +124,18 @@ struct FocusedText {
         case unknown       // an ambiguous role — assume it can, but keep the result safe
 
         static let editableRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"]
+        /// Only roles that can never take typed text. Containers like
+        /// AXSplitGroup (Word's document) or "no element" (VS Code) stay
+        /// unknown: the paste goes through and the result is also kept on the
+        /// clipboard.
         static let nonEditableRoles: Set<String> = [
             "AXWebArea", "AXStaticText", "AXImage", "AXOutline", "AXTable", "AXBrowser", "AXList", "AXRow",
-            "AXCell", "AXWindow", "AXButton", "AXLink", "AXMenuItem", "AXMenu", "AXToolbar", "AXRadioButton",
-            "AXCheckBox", "AXPopUpButton", "AXSlider", "AXSplitGroup", "AXTabGroup", "AXApplication", "AXDocument",
+            "AXCell", "AXButton", "AXLink", "AXMenuItem", "AXMenu", "AXRadioButton", "AXCheckBox",
+            "AXPopUpButton", "AXSlider",
         ]
 
         static func classify(role: String?, valueSettable: Bool) -> PasteTarget {
-            guard let role else { return .nonEditable }
+            guard let role else { return .unknown }
             if editableRoles.contains(role) || valueSettable { return .editable }
             if nonEditableRoles.contains(role) { return .nonEditable }
             return .unknown
@@ -121,16 +144,8 @@ struct FocusedText {
 
     /// Looks at the focused element right before pasting.
     static func pasteTarget() -> (target: PasteTarget, role: String) {
-        let system = AXUIElementCreateSystemWide()
-        var focusedRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
-              let focusedAny = focusedRef else {
-            return (.nonEditable, "no focused element")
-        }
-        let element = focusedAny as! AXUIElement
-        var roleRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
-        let role = (roleRef as? String) ?? "?"
+        guard let element = focusedElement() else { return (.unknown, "no focused element") }
+        let role = role(of: element)
         var settable = DarwinBoolean(false)
         AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable)
         return (PasteTarget.classify(role: role, valueSettable: settable.boolValue), role)
@@ -149,7 +164,16 @@ struct FocusedText {
         }
         defer { Paster.restore(snapshot, to: pb) }
         guard pb.changeCount != before else { return nil }
-        return pb.string(forType: .string)
+        // VS Code (and other Monaco editors) copy the whole line when nothing
+        // is selected, and say so in their own pasteboard type.
+        if let data = pb.data(forType: NSPasteboard.PasteboardType("vscode-editor-data")),
+           let meta = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           meta["isFromEmptySelection"] as? Bool == true {
+            return nil
+        }
+        guard let text = pb.string(forType: .string),
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return text
     }
 
     /// Adjusts dictated text for where it lands: a space when glued to a word

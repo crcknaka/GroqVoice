@@ -56,10 +56,11 @@ import Testing
     @Test func pagesAndListsAreNot() {
         #expect(FocusedText.PasteTarget.classify(role: "AXWebArea", valueSettable: false) == .nonEditable)
         #expect(FocusedText.PasteTarget.classify(role: "AXOutline", valueSettable: false) == .nonEditable)
-        #expect(FocusedText.PasteTarget.classify(role: nil, valueSettable: false) == .nonEditable)
     }
 
     @Test func unknownRolesStayCautious() {
         #expect(FocusedText.PasteTarget.classify(role: "AXGroup", valueSettable: false) == .unknown)
+        #expect(FocusedText.PasteTarget.classify(role: "AXSplitGroup", valueSettable: false) == .unknown)  // Word
+        #expect(FocusedText.PasteTarget.classify(role: nil, valueSettable: false) == .unknown)             // VS Code
     }
 }
