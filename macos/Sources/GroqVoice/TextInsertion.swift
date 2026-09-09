@@ -47,11 +47,23 @@ struct FocusedText {
         let role: String
         let text: String?
         let source: String   // "accessibility", "⌘C", "none"
+        /// Accessibility gave no definitive answer; a ⌘C probe may still find a
+        /// selection (deferred until the hotkey is released, to stay out of
+        /// the way of shortcuts).
+        let copyWorthTrying: Bool
 
         var description: String {
-            let n = text.map { "\($0.count) chars via \(source)" } ?? "none"
+            let n = text.map { "\($0.count) chars via \(source)" } ?? (copyWorthTrying ? "none yet (⌘C probe at release)" : "none")
             return "focus: \(app) / \(role), selection: \(n)"
         }
+    }
+
+    /// Editors that copy the whole line when nothing is selected — a ⌘C probe
+    /// would invent a selection there. (VS Code marks such copies and is handled.)
+    private static let lineCopyingApps = ["com.jetbrains.", "com.sublimetext.", "dev.zed."]
+    private static var frontmostCopiesLines: Bool {
+        guard let id = NSWorkspace.shared.frontmostApplication?.bundleIdentifier?.lowercased() else { return false }
+        return lineCopyingApps.contains { id.hasPrefix($0) }
     }
 
     /// The element with keyboard focus: the system-wide attribute first, then
@@ -82,40 +94,41 @@ struct FocusedText {
     /// VS Code, terminals, web pages) a synthesized ⌘C fetches it and the
     /// clipboard is put back right away. Apps that do expose it but report it
     /// empty (JetBrains, Xcode) are trusted — their ⌘C would copy a whole line.
-    static func probeSelection() -> SelectionProbe {
+    /// `allowCopy: false` is side-effect free (Accessibility only) and is what
+    /// runs at key-down; `allowCopy: true` may synthesize ⌘C and runs once the
+    /// key is released, so a held modifier never turns it into ⌥⌘C. Chat apps
+    /// (WhatsApp, Telegram) keep focus in the compose box while you select a
+    /// message, so their selection is only ever reachable through ⌘C.
+    static func probeSelection(allowCopy: Bool) -> SelectionProbe {
         let app = NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
-        guard let element = focusedElement() else {
+        let copyAllowedHere = !frontmostCopiesLines
+
+        func viaCopy(role: String) -> SelectionProbe {
+            guard copyAllowedHere else { return SelectionProbe(app: app, role: role, text: nil, source: "none", copyWorthTrying: false) }
+            guard allowCopy else { return SelectionProbe(app: app, role: role, text: nil, source: "none", copyWorthTrying: true) }
             if let copied = copySelectionViaCommandC() {
-                return SelectionProbe(app: app, role: "no focused element", text: copied, source: "⌘C")
+                return SelectionProbe(app: app, role: role, text: copied, source: "⌘C", copyWorthTrying: false)
             }
-            return SelectionProbe(app: app, role: "no focused element", text: nil, source: "none")
+            return SelectionProbe(app: app, role: role, text: nil, source: "none", copyWorthTrying: false)
         }
+
+        guard let element = focusedElement() else { return viaCopy(role: "no focused element") }
         let role = role(of: element)
 
         var selectedRef: CFTypeRef?
         let status = AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &selectedRef)
         if status == .success, let selected = selectedRef as? String,
            !selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return SelectionProbe(app: app, role: role, text: selected, source: "accessibility")
+            return SelectionProbe(app: app, role: role, text: selected, source: "accessibility", copyWorthTrying: false)
         }
         if PasteTarget.nonEditableRoles.contains(role) && role != "AXWebArea" {
-            return SelectionProbe(app: app, role: role, text: nil, source: "none")  // lists, buttons: nothing to edit
+            // Lists, buttons, images: nothing to edit and ⌘C would copy files or nothing.
+            return SelectionProbe(app: app, role: role, text: nil, source: "none", copyWorthTrying: false)
         }
-
-        var rangeRef: CFTypeRef?
-        var range = CFRange()
-        let hasRange = AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success
-            && rangeRef != nil && AXValueGetValue(rangeRef as! AXValue, .cfRange, &range) && range.length > 0
-        let exposesSelection = status == .success || status == .noValue
-        if hasRange || !exposesSelection || role == "AXWebArea" {
-            if let copied = copySelectionViaCommandC() {
-                return SelectionProbe(app: app, role: role, text: copied, source: "⌘C")
-            }
-        }
-        return SelectionProbe(app: app, role: role, text: nil, source: "none")
+        return viaCopy(role: role)
     }
 
-    static func selectedText() -> String? { probeSelection().text }
+    static func selectedText() -> String? { probeSelection(allowCopy: true).text }
 
     /// Can the focused element take a paste?
     enum PasteTarget: Equatable {

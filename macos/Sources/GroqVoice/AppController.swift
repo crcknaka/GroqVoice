@@ -81,6 +81,8 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var takeKind: TakeKind = .dictate
     /// Text that was selected in the focused app when the take started.
     private var pendingSelection: String?
+    /// Accessibility couldn't tell; try a ⌘C probe once the key is released.
+    private var selectionNeedsCopyProbe = false
     private var activeKey: HotkeyKey?
     private var keyDownAt: Date?
     private var lastQuickTapAt: Date?
@@ -345,10 +347,14 @@ final class AppController: NSObject, NSApplicationDelegate {
             return
         }
         // A tap on an action key with text selected applies the action to the
-        // selection — no need to say anything.
-        if case .action = takeKind, pendingSelection != nil {
-            scheduleFinish()
-            return
+        // selection — no need to say anything. The key is up now, so a ⌘C
+        // probe is safe if Accessibility couldn't tell.
+        if case .action = takeKind {
+            resolveSelectionByCopyIfNeeded()
+            if pendingSelection != nil {
+                scheduleFinish()
+                return
+            }
         }
 
         // Quick tap: a second tap within the window locks the recording on.
@@ -362,6 +368,16 @@ final class AppController: NSObject, NSApplicationDelegate {
             lastQuickTapAt = now
             discardRecording(reason: "single tap")
         }
+    }
+
+    /// Second half of the selection probe: ⌘C, allowed only once the hotkey is
+    /// released (a chorded ⌘C would have been ⌥⌘C or ⌃⌘C for the app).
+    private func resolveSelectionByCopyIfNeeded() {
+        guard pendingSelection == nil, selectionNeedsCopyProbe else { return }
+        selectionNeedsCopyProbe = false
+        let probe = FocusedText.probeSelection(allowCopy: true)
+        pendingSelection = probe.text
+        Log.write(probe.description)
     }
 
     private func chordKey() {
@@ -401,10 +417,12 @@ final class AppController: NSObject, NSApplicationDelegate {
             // A selection at key-down becomes the target: dictation edits it,
             // an action key applies its action to it.
             pendingSelection = nil
+            selectionNeedsCopyProbe = false
             let wantsSelection = takeKind == .dictate ? config.editSelection : true
             if wantsSelection, config.llmConfigured || LocalLLM.isAvailable {
-                let probe = FocusedText.probeSelection()
+                let probe = FocusedText.probeSelection(allowCopy: false)
                 pendingSelection = probe.text
+                selectionNeedsCopyProbe = probe.copyWorthTrying
                 Log.write(probe.description)
             }
             let icon: IconState
@@ -433,6 +451,8 @@ final class AppController: NSObject, NSApplicationDelegate {
         tailTimer = nil
         recorder.discard()
         phase = .idle
+        pendingSelection = nil
+        selectionNeedsCopyProbe = false
         setIcon(.ready)
         Log.write("recording discarded (\(reason))")
         prepareRecorder()
@@ -450,8 +470,10 @@ final class AppController: NSObject, NSApplicationDelegate {
         Log.write(String(format: "recording stopped: %.2fs, peak=%.2f%%", take.duration, take.peakPercent))
 
         let kind = takeKind
+        resolveSelectionByCopyIfNeeded()
         let selection = pendingSelection
         pendingSelection = nil
+        selectionNeedsCopyProbe = false
         // An action key with a selection needs no speech at all; anything
         // else that is too short or silent was an accidental press.
         var actionOnSelectionOnly = false
