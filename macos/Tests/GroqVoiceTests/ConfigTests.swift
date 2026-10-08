@@ -67,4 +67,14 @@ import Testing
         #expect(cfg.chatPort == 11434)
         #expect(cfg.llmConfigured)  // custom endpoint needs no key
     }
+
+    @Test func aTrailingSlashDoesNotMakeGroqACustomEndpoint() {
+        var cfg = Config()
+        cfg.chatBaseURL = Config.groqBaseURL + "/"
+        #expect(cfg.usesGroqForChat)
+        #expect(!cfg.llmConfigured)              // still needs the Groq key
+        cfg.chatBaseURL = "http://localhost:11434/v1"
+        #expect(!cfg.usesGroqForChat)
+        #expect(cfg.llmConfigured)
+    }
 }

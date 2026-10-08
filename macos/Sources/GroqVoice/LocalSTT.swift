@@ -28,6 +28,9 @@ final class LocalSTT {
     /// Called on the main thread.
     var onStage: ((Stage) -> Void)?
 
+    // `manager` and `loadTask` are reached from the main thread and from
+    // whichever task is transcribing — always under `lock`.
+    private let lock = NSLock()
     private var manager: AsrManager?
     private var loadTask: Task<AsrManager, Error>?
     private var unloadTimer: Timer?
@@ -50,7 +53,7 @@ final class LocalSTT {
         AsrModels.modelsExist(at: LocalSTT.parakeetDir, version: .v3)
     }
 
-    var isLoaded: Bool { manager != nil }
+    var isLoaded: Bool { lock.withLock { manager != nil } }
 
     private func emit(_ stage: Stage) {
         DispatchQueue.main.async { [weak self] in self?.onStage?(stage) }
@@ -60,63 +63,71 @@ final class LocalSTT {
     /// parallel callers share one load.
     @discardableResult
     func ensureLoaded() async throws -> AsrManager {
-        if let manager { return manager }
-        if let loadTask { return try await loadTask.value }
-
-        let task = Task<AsrManager, Error> { [weak self] in
-            let started = Date()
-            let dir = LocalSTT.parakeetDir
-            try FileManager.default.createDirectory(at: LocalSTT.modelsDir, withIntermediateDirectories: true)
-
-            let wasDownloaded = AsrModels.modelsExist(at: dir, version: .v3)
-            if !wasDownloaded {
-                Log.write("local STT: downloading Parakeet v3 (~\(LocalSTT.approximateDownloadMB) MB)…")
-                self?.emit(.downloadingModel(0))
-            } else {
-                self?.emit(.loadingModel)
-            }
-
-            let models = try await AsrModels.downloadAndLoad(to: dir, version: .v3) { [weak self] progress in
-                // Download phases carry a real fraction; compilation has no
-                // fine-grained progress, so that becomes the indeterminate spinner.
-                switch progress.phase {
-                case .listing, .downloading:
-                    if progress.fractionCompleted.isFinite {
-                        self?.emit(.downloadingModel(min(progress.fractionCompleted, 0.99)))
+        let task: Task<AsrManager, Error> = lock.withLock {
+            if let manager { return Task { manager } }
+            if let loadTask { return loadTask }
+            let task = Task<AsrManager, Error> { [weak self] in
+                do {
+                    let manager = try await LocalSTT.load { self?.emit($0) }
+                    self?.lock.withLock {
+                        self?.manager = manager
+                        self?.loadTask = nil
                     }
-                case .compiling:
-                    self?.emit(.loadingModel)
+                    self?.emit(.ready)
+                    return manager
+                } catch {
+                    self?.lock.withLock { self?.loadTask = nil }
+                    Log.write("local STT: model load failed: \(error.localizedDescription)")
+                    self?.emit(.failed(error.localizedDescription))
+                    throw error
                 }
             }
-            if !wasDownloaded {
-                Log.write(String(format: "local STT: model downloaded in %.0fs", Date().timeIntervalSince(started)))
+            loadTask = task
+            return task
+        }
+        return try await task.value
+    }
+
+    private static func load(emit: @escaping (Stage) -> Void) async throws -> AsrManager {
+        let started = Date()
+        let dir = LocalSTT.parakeetDir
+        try FileManager.default.createDirectory(at: LocalSTT.modelsDir, withIntermediateDirectories: true)
+
+        let wasDownloaded = AsrModels.modelsExist(at: dir, version: .v3)
+        if !wasDownloaded {
+            Log.write("local STT: downloading Parakeet v3 (~\(LocalSTT.approximateDownloadMB) MB)…")
+            emit(.downloadingModel(0))
+        } else {
+            emit(.loadingModel)
+        }
+
+        let models = try await AsrModels.downloadAndLoad(to: dir, version: .v3) { progress in
+            // Download phases carry a real fraction; compilation has no
+            // fine-grained progress, so that becomes the indeterminate spinner.
+            switch progress.phase {
+            case .listing, .downloading:
+                if progress.fractionCompleted.isFinite {
+                    emit(.downloadingModel(min(progress.fractionCompleted, 0.99)))
+                }
+            case .compiling:
+                emit(.loadingModel)
             }
-            self?.emit(.loadingModel)
-
-            let manager = AsrManager(config: .default)
-            try await manager.loadModels(models)
-            Log.write(String(format: "local STT: Parakeet v3 ready in %.1fs", Date().timeIntervalSince(started)))
-            return manager
         }
-        loadTask = task
-        defer { loadTask = nil }
-
-        do {
-            let manager = try await task.value
-            self.manager = manager
-            emit(.ready)
-            return manager
-        } catch {
-            Log.write("local STT: model load failed: \(error.localizedDescription)")
-            emit(.failed(error.localizedDescription))
-            throw error
+        if !wasDownloaded {
+            Log.write(String(format: "local STT: model downloaded in %.0fs", Date().timeIntervalSince(started)))
         }
+        emit(.loadingModel)
+
+        let manager = AsrManager(config: .default)
+        try await manager.loadModels(models)
+        Log.write(String(format: "local STT: Parakeet v3 ready in %.1fs", Date().timeIntervalSince(started)))
+        return manager
     }
 
     /// Kicks off download + load without waiting for it (launch, first run, or
     /// the first dictation served by the cloud while the model arrives).
     func warmUpInBackground() {
-        guard manager == nil else { return }
+        guard !isLoaded else { return }
         Task { [weak self] in _ = try? await self?.ensureLoaded() }
     }
 
@@ -151,13 +162,15 @@ final class LocalSTT {
     }
 
     private func scheduleUnload() {
-        guard unloadAfterSeconds > 0 else { return }
         DispatchQueue.main.async { [self] in
+            guard unloadAfterSeconds > 0 else { return }
             unloadTimer?.invalidate()
             unloadTimer = Timer.scheduledTimer(withTimeInterval: unloadAfterSeconds, repeats: false) { [weak self] _ in
-                guard let self, let manager = self.manager else { return }
+                guard let self, let manager = self.lock.withLock({ () -> AsrManager? in
+                    defer { self.manager = nil }
+                    return self.manager
+                }) else { return }
                 Task { await manager.cleanup() }
-                self.manager = nil
                 Log.write("local STT: model unloaded after \(Int(self.unloadAfterSeconds / 60)) min idle")
             }
         }

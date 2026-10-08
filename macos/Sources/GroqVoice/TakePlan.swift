@@ -57,7 +57,7 @@ struct TakePlan: Equatable {
             var system = action.isTranslate
                 ? TaskRouter.translateSystemPrompt(to: action.languageName)
                 : TaskRouter.customActionSystemPrompt(action.prompt)
-            var user = target
+            var user = action.isTranslate ? target : TaskRouter.fenced(target)
             if selection != nil, !isBlank(transcript) {
                 system += TaskRouter.spokenNoteRule
                 user = TaskRouter.actionUserMessage(target: target, spoken: transcript)
@@ -75,10 +75,13 @@ struct TakePlan: Equatable {
         if let selection {
             // An instruction about the selection, or its replacement — the model
             // decides. "задание: …" in front is fine too: drop the keyword.
+            // Without the model the selection stays: pasting "сделай короче"
+            // over the paragraph it was said about would destroy it.
             let user = TaskRouter.editSelectionUserMessage(selection: selection, spoken: taskQuery ?? transcript)
             return TakePlan(kind: .edit, text: transcript,
                             request: Request(system: TaskRouter.editSelectionSystemPrompt, user: user),
-                            original: selection, spokenFormatting: cfg.spokenFormatting)
+                            withoutAnswer: .fail("No language model answered — the selection was left as it is"),
+                            original: selection)
         }
         if let expansion = snippets.expansion(for: transcript) {
             // The whole utterance is a snippet phrase: its text, no model.

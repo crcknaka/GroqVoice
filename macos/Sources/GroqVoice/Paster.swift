@@ -14,6 +14,7 @@ enum PasteMode: String, Codable {
 enum Paster {
     private static let typingQueue = DispatchQueue(label: "groqvoice.typing", qos: .userInitiated)
     private static let restoreDelay: TimeInterval = 0.7
+    private static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
 
     static func deliver(_ text: String, mode: PasteMode, restoreClipboard: Bool) {
         guard !text.isEmpty else { return }
@@ -34,7 +35,13 @@ enum Paster {
         let snapshot = restoreClipboard ? snapshotPasteboard(pb) : []
 
         pb.clearContents()
-        pb.setString(text, forType: .string)
+        let item = NSPasteboardItem()
+        item.setString(text, forType: .string)
+        // The text is on the clipboard only for the ⌘V: clipboard managers
+        // skip items marked this way (nspasteboard.org) instead of recording
+        // every dictation.
+        if restoreClipboard { item.setData(Data(), forType: transientType) }
+        pb.writeObjects([item])
         let ourChange = pb.changeCount
 
         waitForModifierRelease()

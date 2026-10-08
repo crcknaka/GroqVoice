@@ -20,9 +20,8 @@ if CommandLine.arguments.contains("--download-model") {
     Task {
         do {
             try await stt.ensureLoaded()
-            if let wav = try? Data(contentsOf: Recorder.wavURL) {
-                // Strip the 44-byte header our Recorder writes.
-                let text = try await stt.transcribe(pcm16: wav.dropFirst(44), language: cfg.language)
+            if let wav = try? Data(contentsOf: Recorder.wavURL), let range = Recorder.dataChunkRange(in: wav) {
+                let text = try await stt.transcribe(pcm16: wav.subdata(in: range), language: cfg.language)
                 print("transcript of last.wav: \"\(text)\"")
             }
         } catch {

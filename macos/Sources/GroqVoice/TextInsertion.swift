@@ -277,13 +277,17 @@ struct FocusedText {
     }
 
     /// ⌘C into a scratch clipboard, read, restore. Returns nil when nothing
-    /// arrived within 150 ms (no selection, or the app doesn't copy on ⌘C).
+    /// arrived in time (no selection, or the app doesn't copy on ⌘C). Most
+    /// takes have no selection and sit out the whole wait, while a real copy
+    /// lands within 40 ms — so the wait is kept short.
+    private static let copyProbeTimeout: TimeInterval = 0.07
+
     private static func copySelectionViaCommandC() -> String? {
         let pb = NSPasteboard.general
         let snapshot = Paster.snapshotPasteboard(pb)
         let before = pb.changeCount
         Paster.pressCommandC()
-        let deadline = Date().addingTimeInterval(0.15)
+        let deadline = Date().addingTimeInterval(copyProbeTimeout)
         while pb.changeCount == before && Date() < deadline {
             Thread.sleep(forTimeInterval: 0.01)
         }

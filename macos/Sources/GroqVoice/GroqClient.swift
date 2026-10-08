@@ -104,9 +104,11 @@ final class GroqClient {
     /// request can hit a dead socket and throw "network connection lost". These
     /// errors are spurious — a retry opens a fresh connection and succeeds.
     /// Retrying here avoids falling back to local Whisper on a healthy network.
+    /// A timeout is not one of them: the request already waited its 25 s, and
+    /// two more rounds would hold the take for over a minute.
     private static func isTransient(_ error: URLError) -> Bool {
         switch error.code {
-        case .networkConnectionLost, .timedOut, .cannotConnectToHost,
+        case .networkConnectionLost, .cannotConnectToHost,
              .cannotFindHost, .dnsLookupFailed, .secureConnectionFailed,
              .resourceUnavailable, .badServerResponse:
             return true
@@ -215,6 +217,15 @@ final class GroqClient {
             let choices: [Choice]
         }
         let r = try JSONDecoder().decode(R.self, from: data)
-        return r.choices.first?.message.content.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return GroqClient.stripReasoning(r.choices.first?.message.content ?? "")
+    }
+
+    /// Reasoning models served by Ollama and the like put their thinking into
+    /// the answer as <think>…</think>; only what follows is meant to be pasted.
+    static func stripReasoning(_ answer: String) -> String {
+        var out = answer.replacingOccurrences(of: #"(?s)<think>.*?</think>"#, with: "", options: .regularExpression)
+        // An answer cut off mid-thought has no text to paste at all.
+        if let open = out.range(of: "<think>") { out = String(out[..<open.lowerBound]) }
+        return out.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

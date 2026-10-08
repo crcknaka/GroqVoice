@@ -111,7 +111,14 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var spinnerAngle: CGFloat = 90
     private var flashTimer: Timer?
     private var tailTimer: Timer?
+    private var maxLengthTimer: Timer?
     private var releasedAt: Date?
+    /// The take being processed, kept so Esc can abandon it.
+    private var takeTask: Task<Void, Never>?
+    private var sttTask: Task<String, Error>?
+    private var processingSince: Date?
+    /// Why the last take failed, for the menu; cleared by the next one that works.
+    var lastError: (message: String, at: Date)?
 
     /// The push-to-talk key plus every key that has an action.
     var monitoredKeys: Set<HotkeyKey> {
@@ -299,9 +306,24 @@ final class AppController: NSObject, NSApplicationDelegate {
         hotkey.onKeyDown = { [weak self] key in self?.keyDown(key) }
         hotkey.onKeyUp = { [weak self] key in self?.keyUp(key) }
         hotkey.onChordKey = { [weak self] in self?.chordKey() }
-        hotkey.onEscape = { [weak self] in
-            guard let self, case .recording = self.phase else { return }
-            self.discardRecording(reason: "escape")
+        hotkey.onEscape = { [weak self] in self?.escape() }
+    }
+
+    private func escape() {
+        switch phase {
+        case .recording:
+            discardRecording(reason: "escape")
+        case .processing:
+            // Esc is an ordinary key in the app being typed into, and a take
+            // is normally done within a fraction of a second — only one that
+            // is visibly stuck is abandoned by it.
+            guard let since = processingSince, Date().timeIntervalSince(since) >= 1 else { return }
+            Log.write("processing cancelled (escape)")
+            takeTask?.cancel()
+            sttTask?.cancel()
+            finishProcessing()
+        case .idle:
+            break
         }
     }
 
@@ -400,17 +422,33 @@ final class AppController: NSObject, NSApplicationDelegate {
             setIcon(icon)
             playSound("Pop")
             Log.write("recording started (\(label))")
+            startMaxLengthTimer()
         } catch {
             phase = .idle
+            lastError = (AppController.shortError(error), Date())
             flashIcon(.failed)
             playSound("Basso")
             Log.write("mic error: \(error.localizedDescription)")
         }
     }
 
+    /// Stops and processes a take that reached `maxRecordingMinutes`.
+    private func startMaxLengthTimer() {
+        maxLengthTimer?.invalidate()
+        let minutes = config.maxRecordingMinutes
+        guard minutes > 0 else { return }
+        maxLengthTimer = Timer.scheduledTimer(withTimeInterval: minutes * 60, repeats: false) { [weak self] _ in
+            guard let self, case .recording = self.phase else { return }
+            Log.write("recording reached the \(minutes) min limit — stopping")
+            self.finishRecording()
+        }
+    }
+
     private func discardRecording(reason: String) {
         tailTimer?.invalidate()
         tailTimer = nil
+        maxLengthTimer?.invalidate()
+        maxLengthTimer = nil
         recorder.discard()
         phase = .idle
         pendingSelection = nil
@@ -423,7 +461,12 @@ final class AppController: NSObject, NSApplicationDelegate {
     private func finishRecording() {
         tailTimer?.invalidate()
         tailTimer = nil
+        maxLengthTimer?.invalidate()
+        maxLengthTimer = nil
+        // Not every stop follows a key release (the length limit, a microphone
+        // that went away): those are timed from now.
         let timing = TakeTiming(released: releasedAt ?? Date())
+        releasedAt = nil
         guard let take = timing.measure("stop", { recorder.stop() }) else {
             phase = .idle
             setIcon(.ready)
@@ -440,7 +483,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         let silent = take.peakPercent < cfg.silencePeakPercent
 
         // Recognition starts right away, on its own thread: the ⌘C selection
-        // probe below can hold the main thread for 150 ms, and used to delay it.
+        // probe below holds the main thread while it waits, and used to delay it.
         let sttTask: Task<String, Error>? = (tooShort || silent) ? nil : Task { [weak self] in
             guard let self else { return "" }
             return try await timing.measure("stt") {
@@ -467,14 +510,19 @@ final class AppController: NSObject, NSApplicationDelegate {
         if cfg.saveLastWav { take.saveForDebugging() }
 
         phase = .processing
+        processingSince = Date()
         setIcon(.processing)
+        self.sttTask = sttTask
 
-        Task { [weak self] in
+        // On the main actor: the vocabulary, the snippets and the history are
+        // main-thread state. Only the awaits (recognition, the model) leave it.
+        takeTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 var transcript = ""
                 if let sttTask {
                     transcript = try await sttTask.value
+                    try Task.checkCancellation()
                     Log.write("STT result: \"\(transcript)\"")
                     let aliased = self.vocabulary.applyAliases(to: transcript)
                     if !aliased.changes.isEmpty {
@@ -495,61 +543,70 @@ final class AppController: NSObject, NSApplicationDelegate {
                         await self.obtainChatAnswer(query: request.user, system: request.system, cfg: cfg,
                                                     probe: chatProbe, temperature: request.temperature)
                     }
+                    try Task.checkCancellation()
                 }
                 let result = try plan.result(answer: answer)
                 if let note = result.note { Log.write(note) }
                 if result.text != transcript {
                     Log.write("\(result.kind.rawValue) → \"\(result.text.prefix(200).replacingOccurrences(of: "\n", with: "⏎"))\"")
                 }
-
-                let finalText = result.text
-                let terms = Set(self.vocabulary.entries.map(\.term))
-                await MainActor.run {
-                    var toInsert = finalText
-                    let contextStarted = Date()
-                    // Replacing a selection: the text takes the selection's exact place.
-                    if cfg.smartSpacing, selection == nil, let context = FocusedText.current() {
-                        toInsert = context.adjust(finalText, knownTerms: terms)
-                        if toInsert != finalText { Log.write("smart spacing: adjusted for the caret context") }
-                    }
-                    let (target, role) = FocusedText.pasteTarget()
-                    timing.add("context", since: contextStarted)
-                    let pasteStarted = Date()
-                    switch target {
-                    case .editable:
-                        Paster.deliver(toInsert, mode: cfg.pasteMode, restoreClipboard: cfg.restoreClipboard)
-                    case .unknown:
-                        // Probably a text view we can't read; paste, but keep the
-                        // result on the clipboard in case nothing took it.
-                        Paster.deliver(toInsert, mode: cfg.pasteMode, restoreClipboard: false)
-                        Log.write("paste target \(role) is ambiguous — result left on the clipboard as well")
-                    case .nonEditable:
-                        // A web page, PDF, file list…: nowhere to type. Hand the
-                        // result over via the clipboard instead of losing it.
-                        let pb = NSPasteboard.general
-                        pb.clearContents()
-                        pb.setString(finalText, forType: .string)
-                        self.flashIcon(.copied, for: 2.5)
-                        Log.write("nowhere to paste (focus: \(role)) — result copied to the clipboard")
-                    }
-                    timing.add("paste", since: pasteStarted)
-                    Log.write(String(format: "take: key released → delivered in %.2fs (tail %.0f · %@)",
-                                     Date().timeIntervalSince(timing.released), cfg.releaseTailMs, timing.summary))
-                    self.history.add(finalText, kind: result.kind, source: result.original)
-                    self.finishProcessing()
-                }
+                self.deliver(result, replacingSelection: selection != nil, cfg: cfg, timing: timing)
+                self.lastError = nil
+                self.finishProcessing()
             } catch {
-                Log.write("error: \(AppController.shortError(error)) — \(error.localizedDescription)")
-                await MainActor.run {
-                    self.playSound("Basso")
-                    self.finishProcessing()
-                    self.flashIcon(.failed)
-                }
+                // Abandoned with Esc: the app has already moved on.
+                guard !Task.isCancelled else { return }
+                let short = AppController.shortError(error)
+                Log.write("error: \(short) — \(error.localizedDescription)")
+                self.lastError = (short, Date())
+                self.playSound("Basso")
+                self.finishProcessing()
+                self.flashIcon(.failed)
             }
         }
     }
 
+    /// Puts a take's text into the focused app — or, where there is nowhere
+    /// to type, on the clipboard — and records it in the history.
+    private func deliver(_ result: TakePlan.Result, replacingSelection: Bool, cfg: Config, timing: TakeTiming) {
+        let text = result.text
+        var toInsert = text
+        let contextStarted = Date()
+        // Replacing a selection: the text takes the selection's exact place.
+        if cfg.smartSpacing, !replacingSelection, let context = FocusedText.current() {
+            toInsert = context.adjust(text, knownTerms: Set(vocabulary.entries.map(\.term)))
+            if toInsert != text { Log.write("smart spacing: adjusted for the caret context") }
+        }
+        let (target, role) = FocusedText.pasteTarget()
+        timing.add("context", since: contextStarted)
+        let pasteStarted = Date()
+        switch target {
+        case .editable:
+            Paster.deliver(toInsert, mode: cfg.pasteMode, restoreClipboard: cfg.restoreClipboard)
+        case .unknown:
+            // Probably a text view we can't read; paste, but keep the
+            // result on the clipboard in case nothing took it.
+            Paster.deliver(toInsert, mode: cfg.pasteMode, restoreClipboard: false)
+            Log.write("paste target \(role) is ambiguous — result left on the clipboard as well")
+        case .nonEditable:
+            // A web page, PDF, file list…: nowhere to type. Hand the
+            // result over via the clipboard instead of losing it.
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(text, forType: .string)
+            flashIcon(.copied, for: 2.5)
+            Log.write("nowhere to paste (focus: \(role)) — result copied to the clipboard")
+        }
+        timing.add("paste", since: pasteStarted)
+        Log.write(String(format: "take: key released → delivered in %.2fs (tail %.0f · %@)",
+                         Date().timeIntervalSince(timing.released), cfg.releaseTailMs, timing.summary))
+        history.add(text, kind: result.kind, source: result.original)
+    }
+
     private func finishProcessing() {
+        takeTask = nil
+        sttTask = nil
+        processingSince = nil
         phase = .idle
         setIcon(.ready)
         // Prepare the next take's engine only now — doing it before the
@@ -626,6 +683,7 @@ final class AppController: NSObject, NSApplicationDelegate {
                 Log.write("chat: \(cfg.chatHost) failed (\(error.localizedDescription.prefix(120)))")
             }
         }
+        if Task.isCancelled { return nil }
         if LocalLLM.isAvailable {
             do {
                 Log.write("chat: using Apple on-device model")
@@ -635,7 +693,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             }
         }
         // The probe may have been a transient false negative — try anyway.
-        if configured && !reachable {
+        if configured && !reachable && !Task.isCancelled {
             do {
                 return try await groq.chat(userText: query, systemPrompt: system, temperature: temperature)
             } catch {

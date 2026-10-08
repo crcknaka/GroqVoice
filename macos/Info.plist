@@ -23,7 +23,7 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>GroqVoice records your voice to transcribe it via the Groq API.</string>
+	<string>GroqVoice records your voice to turn it into text — on this Mac, or through the Groq API if you choose that engine.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>MIT License</string>
 </dict>

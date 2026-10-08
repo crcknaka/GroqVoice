@@ -22,6 +22,10 @@ extension AppController: NSMenuDelegate {
             menu.addItem(fix)
             menu.addItem(item("Relaunch GroqVoice (after granting)", #selector(relaunch)))
         }
+        if let lastError {
+            let time = DateFormatter.localizedString(from: lastError.at, dateStyle: .none, timeStyle: .short)
+            menu.addItem(status("Last take failed (\(time)): \(lastError.message)"))
+        }
         menu.addItem(.separator())
 
         menu.addItem(recentMenuItem())

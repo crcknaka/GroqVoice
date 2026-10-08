@@ -66,6 +66,9 @@ struct Config: Codable {
     /// Takes shorter than this are dropped as accidental. Measured on captured
     /// audio, so keep it well under a one-word utterance (~0.5 s).
     var minRecordingSeconds = 0.3
+    /// A take that runs this long is stopped and processed — a locked
+    /// recording that was forgotten must not hold the microphone for hours.
+    var maxRecordingMinutes = 10.0
     var silencePeakPercent = 1.0
     var saveLastWav = true
     var playFeedbackSounds = true
@@ -114,7 +117,10 @@ struct Config: Codable {
 
     static let groqBaseURL = "https://api.groq.com/openai/v1"
 
-    var usesGroqForChat: Bool { chatBaseURL.trimmingCharacters(in: .whitespaces).isEmpty || chatBaseURL == Config.groqBaseURL }
+    var usesGroqForChat: Bool {
+        let base = chatBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: " /"))
+        return base.isEmpty || base == Config.groqBaseURL
+    }
     var effectiveChatApiKey: String { chatApiKey.isEmpty ? groqApiKey : chatApiKey }
     var chatHost: String { URL(string: chatBaseURL)?.host ?? "api.groq.com" }
     var chatPort: UInt16 {
